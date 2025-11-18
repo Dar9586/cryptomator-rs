@@ -1,4 +1,4 @@
-use crate::cryptomator::{read_file_header, DirId};
+use crate::cryptomator::DirId;
 use anyhow::Result;
 use fallible_iterator::FallibleIterator;
 use std::fs::File;
@@ -16,7 +16,10 @@ fn main() ->Result<()>{
         password: "ciaociao".to_string()
     };
     let x=mator.open()?;
-    let dir_id =DirId::from_str("", &x)?;
+    let dir_id = DirId::from_str("6d5f1839-e421-4720-b491-17c97dfe9b28", &x)?;
+    for x in dir_id.list_files()? {
+        println!("Entry: {:?}", x);
+    }
     let s = x.filename_encrypt("WELCOME.rtf", &dir_id)?;
     println!("{:?}", s);
     let s = x.filename_decrypt(&s.encrypted, &dir_id)?;
@@ -26,8 +29,7 @@ fn main() ->Result<()>{
     let s = x.filename_encrypt("ciao", &dir_id)?;
     println!("{:?}", s);
 
-    let header = read_file_header(&mut reader)?;
-    for chunk in x.read_file_content(&header, &mut reader)?.iterator() {
+    for chunk in x.read_file_content(&mut reader)?.iterator() {
         println!("{:?}", chunk?);
     }
     Ok(())

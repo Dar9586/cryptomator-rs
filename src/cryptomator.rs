@@ -19,8 +19,8 @@ use sha1::digest::Output;
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use std::fs;
-use std::io::Read;
-use std::path::PathBuf;
+use std::io::{BufReader, Read};
+use std::path::{Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
 const FILE_CHUNK_SIZE:usize=32028;
 const SCRYPT_PARALLELISM: u32 = 1;
@@ -64,14 +64,15 @@ pub struct DirId<'a> {
     unencrypted: String,
     prefix: String,
     suffix: String,
-    vault_root: &'a PathBuf,
+    crypto: &'a Cryptomator,
 }
 
 pub struct FileDecrypt<'a, T: Read> {
-    header: &'a FileHeader,
+    header: FileHeader,
     reader: &'a mut T,
     key: CryptoAes256Key,
     counter: u64,
+    failed: bool
 }
 
 #[derive(Clone, Debug)]
@@ -183,7 +184,7 @@ impl Cryptomator {
     pub fn filename_encrypt(&self, name: &str, parent: &DirId) -> Result<EncryptedFilename> {
         let siv = self.aes_siv_enc(name.nfc().to_string().as_bytes(), Some(parent))?;
         let name = base64_enc(&siv);
-        let compressed = (name.len() > self.metadata.shortening_threshold as usize - ".c9r".len()).then(|| {
+        let compressed = (name.len() + ".c9r".len() > self.metadata.shortening_threshold as usize).then(|| {
             let xx = format!("{}.c9r", name);
             let n = sha1(xx.as_bytes());
             base64_enc(&n)
@@ -198,6 +199,10 @@ impl Cryptomator {
         Ok(sss)
     }
 
+    pub fn get_root(&self) -> Result<DirId<'_>> {
+        Ok(DirId::from_str("", self)?)
+    }
+
     fn decrypt_header(&self, header: &FileHeader) -> Result<([u8; UNUSED_SIZE], CryptoAes256Key)> {
         let v = aes_gcm::Aes256Gcm::new_from_slice(&self.encryption_master)?;
         let mut payload = [0u8; ENCRYPTED_CONTENT_KEY + TAG_SIZE];
@@ -210,16 +215,49 @@ impl Cryptomator {
         Ok((unused, content_key))
     }
 
-    pub fn read_file_content<'a, T: Read>(&self, header: &'a FileHeader, reader: &'a mut T) -> Result<FileDecrypt<'a, T>> {
-        let (_, content_key) = self.decrypt_header(header)?;
+    pub fn read_file_content<'a, T: Read>(&self, reader: &'a mut T) -> Result<FileDecrypt<'a, T>> {
+        let header = read_file_header(reader)?;
+        let (_, content_key) = self.decrypt_header(&header)?;
         Ok(FileDecrypt::new(header, reader, content_key))
+    }
+
+    fn read_entire_content<T: Read>(&self, reader: &mut T) -> Result<Vec<u8>> {
+        let x = self.read_file_content(reader)?;
+        let mut v = Vec::new();
+        for x in x.iterator() {
+            v.extend_from_slice(&x?);
+        }
+        Ok(v)
     }
 }
 
 
 impl<'a, T: Read> FileDecrypt<'a, T> {
-    fn new(header: &'a FileHeader, reader: &'a mut T, key: CryptoAes256Key) -> Self {
-        Self { header, reader, key, counter: 0 }
+    fn new(header: FileHeader, reader: &'a mut T, key: CryptoAes256Key) -> Self {
+        Self { header, reader, key, counter: 0, failed: false }
+    }
+}
+
+impl<T: Read> Iterator for FileDecrypt<'_, T> {
+    type Item = Result<Vec<u8>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.failed { return None; }
+        let chunk = read_chunk(self.reader);
+        if chunk.is_err() {
+            self.failed = true;
+            return Some(Err(anyhow!(chunk.err().unwrap())));
+        }
+        let chunk = chunk.unwrap();
+        if chunk.is_none() { return None; }
+        let dec = decrypt_chunk(chunk.unwrap(), &self.key, self.counter, &self.header.nonce);
+        if dec.is_err() {
+            self.failed = true;
+            return Some(Err(anyhow!(dec.err().unwrap())));
+        }
+        let dec = dec.unwrap();
+        self.counter += 1;
+        Some(Ok(dec))
     }
 }
 
@@ -228,6 +266,7 @@ impl<T: Read> FallibleIterator for FileDecrypt<'_, T> {
     type Error = anyhow::Error;
 
     fn next(&mut self) -> Result<Option<Self::Item>, Self::Error> {
+        if self.failed { return Ok(None); }
         let chunk = read_chunk(self.reader)?;
         if chunk.is_none() { return Ok(None); }
         let dec = decrypt_chunk(chunk.unwrap(), &self.key, self.counter, &self.header.nonce)?;
@@ -258,10 +297,112 @@ fn base64_enc(data: &[u8]) -> String {
 fn base64_dec(data: &str) -> Result<Vec<u8>> {
     Ok(base64::prelude::BASE64_URL_SAFE.decode(data)?)
 }
+#[derive(Debug, Clone)]
+enum CryptoEntryType {
+    Symlink { target: String },
+    Directory { dir_id: String },
+    File { abs_path: PathBuf },
+}
+#[derive(Debug, Clone)]
+pub struct CryptoEntry {
+    name: String,
+    entry_type: CryptoEntryType,
+}
+const EXTENSION_LENGTH: usize = ".c9s".len();
 
 impl<'a> DirId<'a>{
+    fn try_read_dir(&self, abs_path: &Path, dec_name: &str) -> Result<Option<CryptoEntry>> {
+        let sub_dir_path = abs_path.join("dir.c9r");
+        if !sub_dir_path.exists() { return Ok(None); }
+        let dir_id = fs::read_to_string(sub_dir_path)?;
+        Ok(Some(CryptoEntry {
+            name: dec_name.to_string(),
+            entry_type: CryptoEntryType::Directory { dir_id },
+        }))
+    }
+
+    fn try_read_sym(&self, abs_path: &Path, dec_name: &str) -> Result<Option<CryptoEntry>> {
+        let sub_sym_path = abs_path.join("symlink.c9r");
+        if !sub_sym_path.exists() { return Ok(None); }
+        let mut reader = BufReader::new(fs::File::open(&sub_sym_path)?);
+        let target = self.crypto.read_entire_content(&mut reader)?;
+        let target = String::from_utf8(target)?;
+        Ok(Some(CryptoEntry {
+            name: dec_name.to_string(),
+            entry_type: CryptoEntryType::Symlink { target },
+        }))
+    }
+
+    fn try_read_file(&self, abs_path: &Path, dec_name: &str) -> Result<Option<CryptoEntry>> {
+        let file_file = abs_path.join("contents.c9r");
+        if !file_file.exists() { return Ok(None); }
+        Ok(Some(CryptoEntry {
+            name: dec_name.to_string(),
+            entry_type: CryptoEntryType::File { abs_path: file_file },
+        }))
+    }
+    pub fn list_files(&self) -> Result<Vec<CryptoEntry>> {
+        let mut entries = Vec::new();
+        let dir_path = self.path();
+        for entry in fs::read_dir(&dir_path)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_str().ok_or_else(|| anyhow!("invalid name"))?;
+            if name == "dirid.c9r" {
+                continue;
+            }
+            let entry_type = entry.file_type()?;
+            let abs_path = dir_path.join(name);
+            let name_no_ext = &name[..name.len() - EXTENSION_LENGTH];
+            if entry_type.is_file() {
+                entries.push(self.parse_file(abs_path, name_no_ext)?);
+            } else if entry_type.is_dir() {
+                entries.push(self.parse_dir(name, &abs_path, name_no_ext)?);
+            } else {
+                return Err(anyhow!("'{}': {:?} is not a file or directory",name, entry_type));
+            }
+        }
+
+        Ok(entries)
+    }
+
+    fn parse_dir(&self, name: &str, abs_path: &PathBuf, name_no_ext: &str) -> Result<CryptoEntry> {
+        let compressed = name.ends_with(".c9s");
+        if !compressed {
+            let dec_name = self.crypto.filename_decrypt(name_no_ext, self)?;
+            if let Some(x) = self.try_read_dir(&abs_path, &dec_name)? {
+                Ok(x)
+            } else if let Some(x) = self.try_read_sym(&abs_path, &dec_name)? {
+                Ok(x)
+            } else {
+                Err(anyhow!("invalid file '{}'",dec_name))
+            }
+        } else {
+            let name_file = abs_path.join("name.c9s");
+            let uncompressed_name = fs::read_to_string(&name_file)?;
+            let dec_name = self.crypto.filename_decrypt(&uncompressed_name[..uncompressed_name.len() - EXTENSION_LENGTH], self)?;
+            if let Some(x) = self.try_read_dir(&abs_path, &dec_name)? {
+                Ok(x)
+            } else if let Some(x) = self.try_read_sym(&abs_path, &dec_name)? {
+                Ok(x)
+            } else if let Some(x) = self.try_read_file(&abs_path, &dec_name)? {
+                Ok(x)
+            } else {
+                Err(anyhow!("invalid file '{}'",dec_name))
+            }
+        }
+    }
+
+    fn parse_file(&self, abs_path: PathBuf, name_no_ext: &str) -> Result<CryptoEntry> {
+        let name = self.crypto.filename_decrypt(name_no_ext, self)?;
+        Ok(CryptoEntry {
+            name,
+            entry_type: CryptoEntryType::File { abs_path },
+        })
+    }
+
     pub fn path(&self) -> PathBuf{
-        self.vault_root.join("d").join(&self.prefix).join(&self.suffix)
+        self.crypto.vault_root.join("d").join(&self.prefix).join(&self.suffix)
     }
     pub fn from_str(str:&str,crypto:&'a Cryptomator)->Result<Self>{
         let siv = crypto.aes_siv_enc(str.as_bytes(), None)?;
@@ -273,7 +414,7 @@ impl<'a> DirId<'a>{
             unencrypted:str.to_string(),
             prefix:encoded,
             suffix,
-            vault_root:&crypto.vault_root
+            crypto
         })
     }
 }
