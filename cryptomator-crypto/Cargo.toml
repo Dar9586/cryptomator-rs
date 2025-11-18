@@ -1,10 +1,9 @@
 [package]
-name = "cryptomator-cli-rs"
+name = "cryptomator-crypto"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-cryptomator-crypto = {path = "cryptomator-crypto"}
 scrypt = "0.11"
 cmac = "0.7"
 hmac = "0.12"

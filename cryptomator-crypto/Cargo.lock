@@ -198,30 +198,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cryptomator-cli-rs"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "aes-kw",
- "aes-siv",
- "anyhow",
- "base32",
- "base64 0.22.1",
- "cmac",
- "cryptomator-crypto",
- "fallible-iterator",
- "hmac",
- "jwt",
- "scrypt",
- "serde",
- "serde_json",
- "serde_with",
- "sha1",
- "sha2",
- "unicode-normalization",
-]
-
-[[package]]
 name = "cryptomator-crypto"
 version = "0.1.0"
 dependencies = [

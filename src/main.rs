@@ -1,17 +1,15 @@
-use crate::cryptomator::DirId;
+use cryptomator_crypto::DirId;
 use anyhow::Result;
 use fallible_iterator::FallibleIterator;
 use std::fs::File;
 use std::path::PathBuf;
-
-mod cryptomator;
 
 fn main() ->Result<()>{
     let path = "/home/dar9586/Test/d/T4/UCNBOMUJR5RO4IRYF6774BIUITJRGD/XYywXz5hdoq9Nk4upZ2OFzGU0rM=.c9s/contents.c9r";
     let path = "/home/dar9586/Test/d/T4/UCNBOMUJR5RO4IRYF6774BIUITJRGD/dirid.c9r";
     let path = "/home/dar9586/Test/d/T4/UCNBOMUJR5RO4IRYF6774BIUITJRGD/BMPUk1CCusyIVdtCS05YCJCb.c9r/symlink.c9r";
     let mut reader = File::open(path)?;
-    let mator=cryptomator::CryptomatorOpen{
+    let mator=cryptomator_crypto::CryptomatorOpen{
         vault_path:PathBuf::from("/home/dar9586/Test/"),
         password: "ciaociao".to_string()
     };

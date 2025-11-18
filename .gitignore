@@ -1,2 +1,4 @@
 /target
 /.idea
+/cryptomator-crypto/target
+/cryptomator-fuse-rs/target
