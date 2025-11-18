@@ -1,5 +1,6 @@
-use crate::cryptomator::{filename_decrypt, filename_encrypt, read_file_content, read_file_header, DirId};
+use crate::cryptomator::{read_file_header, DirId};
 use anyhow::Result;
+use fallible_iterator::FallibleIterator;
 use std::fs::File;
 use std::path::PathBuf;
 
@@ -16,16 +17,18 @@ fn main() ->Result<()>{
     };
     let x=mator.open()?;
     let dir_id =DirId::from_str("", &x)?;
-    let s = filename_encrypt("WELCOME.rtf", &dir_id, &x)?;
+    let s = x.filename_encrypt("WELCOME.rtf", &dir_id)?;
     println!("{:?}", s);
-    let s = filename_decrypt(&s.encrypted, &dir_id, &x)?;
+    let s = x.filename_decrypt(&s.encrypted, &dir_id)?;
     println!("{:?}", s);
-    let s = filename_encrypt("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &dir_id, &x)?;
+    let s = x.filename_encrypt("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &dir_id)?;
     println!("{:?}", s);
-    let s = filename_encrypt("ciao", &dir_id, &x)?;
+    let s = x.filename_encrypt("ciao", &dir_id)?;
     println!("{:?}", s);
 
     let header = read_file_header(&mut reader)?;
-    let content = read_file_content(&header, &mut reader, &x)?;
+    for chunk in x.read_file_content(&header, &mut reader)?.iterator() {
+        println!("{:?}", chunk?);
+    }
     Ok(())
 }

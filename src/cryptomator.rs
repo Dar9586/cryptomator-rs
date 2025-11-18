@@ -7,6 +7,7 @@ use anyhow::{anyhow, Result};
 use base32::Alphabet;
 use base64::Engine;
 use cmac::digest::consts::U64;
+use fallible_iterator::FallibleIterator;
 use hmac::digest::core_api::CoreWrapper;
 use hmac::{Hmac, Mac};
 use jwt::{Header, Token, VerifyWithKey};
@@ -66,6 +67,13 @@ pub struct DirId<'a> {
     vault_root: &'a PathBuf,
 }
 
+pub struct FileDecrypt<'a, T: Read> {
+    header: &'a FileHeader,
+    reader: &'a mut T,
+    key: CryptoAes256Key,
+    counter: u64,
+}
+
 #[derive(Clone, Debug)]
 pub struct EncryptedFilename {
     pub encrypted: String,
@@ -73,7 +81,7 @@ pub struct EncryptedFilename {
 }
 
 #[derive(Debug, Default)]
-struct FileChunk {
+struct EncryptedFileChunk {
     nonce: CryptoNonce,
     encrypted_payload: Vec<u8>,
     tag: CryptoTag,
@@ -112,6 +120,16 @@ fn concat_vec<T:Clone>(v1:&[T], v2:&[T]) -> Vec<T>{
     res
 }
 
+fn fill_array<T: Copy>(v: &mut [T], v1: &[T], v2: &[T]) {
+    v[..v1.len()].copy_from_slice(v1);
+    v[v1.len()..].copy_from_slice(v2);
+}
+
+fn split_array<T: Copy>(v: &[T], v1: &mut [T], v2: &mut [T]) {
+    v1.copy_from_slice(&v[..v1.len()]);
+    v2.copy_from_slice(&v[v1.len()..]);
+}
+
 impl CryptomatorOpen{
     pub fn open(&self)->Result<Cryptomator>{
         let masterkey_path=self.vault_path.join("masterkey.cryptomator");
@@ -134,8 +152,7 @@ impl CryptomatorOpen{
         let key: Hmac<Sha256> = <CoreWrapper<_> as Mac>::new_from_slice(&supreme_key)?;
         let token: Token<Header, VaultMetadata, _> = vault_content.verify_with_key(&key)?;
         let mut siv_key = [0u8; MAC_KEY_LENGTH + ENC_KEY_LENGTH];
-        siv_key[..MAC_KEY_LENGTH].copy_from_slice(&mac_master);
-        siv_key[ENC_KEY_LENGTH..].copy_from_slice(&encryption_master);
+        fill_array(&mut siv_key, &mac_master, &encryption_master);
         Ok(Cryptomator{
             siv_key:GenericArray::from(siv_key),
             encryption_master,
@@ -146,20 +163,77 @@ impl CryptomatorOpen{
     }
 }
 
-fn aes_siv_enc(crypto: &Cryptomator, data: &[u8], dir_id: Option<&DirId>) -> Result<Vec<u8>> {
-    let mut siv:aes_siv::siv::Siv<Aes256, cmac::Cmac<Aes256>>=aes_siv::siv::Siv::new(&crypto.siv_key);//::new(&GenericArray::from(supreme_key));
-    Ok(match dir_id {
-        Some(dir_id) => {siv.encrypt::<_, _>(&[dir_id.unencrypted.as_bytes()], data) }
-        None=>{siv.encrypt::<&[&[u8]], _>(&[], data) }
-    }.map_err(|e| anyhow!(e))?)
+impl Cryptomator {
+    fn aes_siv_enc(&self, data: &[u8], dir_id: Option<&DirId>) -> Result<Vec<u8>> {
+        let mut siv: aes_siv::siv::Siv<Aes256, cmac::Cmac<Aes256>> = aes_siv::siv::Siv::new(&self.siv_key); //::new(&GenericArray::from(supreme_key));
+        Ok(match dir_id {
+            Some(dir_id) => { siv.encrypt::<_, _>(&[dir_id.unencrypted.as_bytes()], data) }
+            None => { siv.encrypt::<&[&[u8]], _>(&[], data) }
+        }.map_err(|e| anyhow!(e))?)
+    }
+
+    fn aes_siv_dec(&self, data: &[u8], dir_id: Option<&DirId>) -> Result<Vec<u8>> {
+        let mut siv: aes_siv::siv::Siv<Aes256, cmac::Cmac<Aes256>> = aes_siv::siv::Siv::new(&self.siv_key); //::new(&GenericArray::from(supreme_key));
+        Ok(match dir_id {
+            Some(dir_id) => { siv.decrypt::<_, _>(&[dir_id.unencrypted.as_bytes()], data) }
+            None => { siv.decrypt::<&[&[u8]], _>(&[], data) }
+        }.map_err(|e| anyhow!(e))?)
+    }
+
+    pub fn filename_encrypt(&self, name: &str, parent: &DirId) -> Result<EncryptedFilename> {
+        let siv = self.aes_siv_enc(name.nfc().to_string().as_bytes(), Some(parent))?;
+        let name = base64_enc(&siv);
+        let compressed = (name.len() > self.metadata.shortening_threshold as usize - ".c9r".len()).then(|| {
+            let xx = format!("{}.c9r", name);
+            let n = sha1(xx.as_bytes());
+            base64_enc(&n)
+        });
+        Ok(EncryptedFilename { encrypted: name, compressed })
+    }
+
+    pub fn filename_decrypt(&self, name: &str, parent: &DirId) -> Result<String> {
+        let x = base64_dec(name)?;
+        let siv = self.aes_siv_dec(&x, Some(parent))?;
+        let sss = String::from_utf8(siv)?;
+        Ok(sss)
+    }
+
+    fn decrypt_header(&self, header: &FileHeader) -> Result<([u8; UNUSED_SIZE], CryptoAes256Key)> {
+        let v = aes_gcm::Aes256Gcm::new_from_slice(&self.encryption_master)?;
+        let mut payload = [0u8; ENCRYPTED_CONTENT_KEY + TAG_SIZE];
+        fill_array(&mut payload, &header.enc_content_key, &header.tag);
+        let payload = Payload::from(payload.as_slice());
+        let dec = v.decrypt(<&Nonce<_>>::from(&header.nonce), payload).map_err(|e| anyhow!(e))?;
+        let mut unused = [0; UNUSED_SIZE];
+        let mut content_key = [0; AES256KEY_BYTES];
+        split_array(&dec, &mut unused, &mut content_key);
+        Ok((unused, content_key))
+    }
+
+    pub fn read_file_content<'a, T: Read>(&self, header: &'a FileHeader, reader: &'a mut T) -> Result<FileDecrypt<'a, T>> {
+        let (_, content_key) = self.decrypt_header(header)?;
+        Ok(FileDecrypt::new(header, reader, content_key))
+    }
 }
 
-fn aes_siv_dec(crypto: &Cryptomator, data: &[u8], dir_id: Option<&DirId>) -> Result<Vec<u8>> {
-    let mut siv: aes_siv::siv::Siv<Aes256, cmac::Cmac<Aes256>> = aes_siv::siv::Siv::new(&crypto.siv_key); //::new(&GenericArray::from(supreme_key));
-    Ok(match dir_id {
-        Some(dir_id) => { siv.decrypt::<_, _>(&[dir_id.unencrypted.as_bytes()], data) }
-        None => { siv.decrypt::<&[&[u8]], _>(&[], data) }
-    }.map_err(|e| anyhow!(e))?)
+
+impl<'a, T: Read> FileDecrypt<'a, T> {
+    fn new(header: &'a FileHeader, reader: &'a mut T, key: CryptoAes256Key) -> Self {
+        Self { header, reader, key, counter: 0 }
+    }
+}
+
+impl<T: Read> FallibleIterator for FileDecrypt<'_, T> {
+    type Item = Vec<u8>;
+    type Error = anyhow::Error;
+
+    fn next(&mut self) -> Result<Option<Self::Item>, Self::Error> {
+        let chunk = read_chunk(self.reader)?;
+        if chunk.is_none() { return Ok(None); }
+        let dec = decrypt_chunk(chunk.unwrap(), &self.key, self.counter, &self.header.nonce)?;
+        self.counter += 1;
+        Ok(Some(dec))
+    }
 }
 
 fn sha1(data: &[u8]) -> Output<Sha1> {
@@ -190,7 +264,7 @@ impl<'a> DirId<'a>{
         self.vault_root.join("d").join(&self.prefix).join(&self.suffix)
     }
     pub fn from_str(str:&str,crypto:&'a Cryptomator)->Result<Self>{
-        let siv = aes_siv_enc(crypto, str.as_bytes(), None)?;
+        let siv = crypto.aes_siv_enc(str.as_bytes(), None)?;
         let sha = sha1(&siv);
         let mut encoded = base32_enc(&sha);
         assert_eq!(encoded.len(),DIRID_NAME_LENGTH);
@@ -204,25 +278,8 @@ impl<'a> DirId<'a>{
     }
 }
 
-pub fn filename_encrypt(name: &str, parent: &DirId, crypto: &Cryptomator) -> Result<EncryptedFilename> {
-    let siv = aes_siv_enc(crypto, name.nfc().to_string().as_bytes(), Some(parent))?;
-    let name = base64_enc(&siv);
-    let compressed = (name.len() > crypto.metadata.shortening_threshold as usize - ".c9r".len()).then(|| {
-        let xx = format!("{}.c9r", name);
-        let n = sha1(xx.as_bytes());
-        base64_enc(&n)
-    });
-    Ok(EncryptedFilename { encrypted: name, compressed })
-}
 
-pub fn filename_decrypt(name: &str, parent: &DirId, crypto: &Cryptomator) -> Result<String> {
-    let x = base64_dec(name)?;
-    let siv = aes_siv_dec(crypto, &x, Some(parent))?;
-    let sss = String::from_utf8(siv)?;
-    Ok(sss)
-}
-
-impl From<&[u8]> for FileChunk {
+impl From<&[u8]> for EncryptedFileChunk {
     fn from(value: &[u8]) -> Self {
         assert!(value.len() >= NONCE_SIZE + TAG_SIZE);
         let mut nonce = [0u8; NONCE_SIZE];
@@ -235,63 +292,39 @@ impl From<&[u8]> for FileChunk {
     }
 }
 
-fn read_chunk<T: Read>(reader: &mut T) -> Result<Option<FileChunk>> {
+fn read_chunk<T: Read>(reader: &mut T) -> Result<Option<EncryptedFileChunk>> {
     let mut chunk=[0u8;FILE_CHUNK_SIZE];
     let mut reached=0;
     loop{
         let r=reader.read(&mut chunk[reached..])?;
         if r==0{
             if reached == 0 { return Ok(None); }
-            return Ok(Some(FileChunk::from(&chunk[..reached])));
+            return Ok(Some(EncryptedFileChunk::from(&chunk[..reached])));
         }
         reached+=r;
         if reached==chunk.len(){
-            return Ok(Some(FileChunk::from(&chunk[..reached])))
+            return Ok(Some(EncryptedFileChunk::from(&chunk[..reached])))
         }
     }
 }
 
-fn decrypt_chunk(chunk: FileChunk, content_key: &[u8; AES256KEY_BYTES], counter: u64, nonce: &CryptoNonce) -> Result<Vec<u8>> {
-    let x = counter.to_be_bytes();
+fn decrypt_chunk(chunk: EncryptedFileChunk, content_key: &[u8; AES256KEY_BYTES], counter: u64, nonce: &CryptoNonce) -> Result<Vec<u8>> {
+    let be_counter = counter.to_be_bytes();
     let mut aad = [0; U64_BYTES + NONCE_SIZE];
-    aad[..U64_BYTES].copy_from_slice(&x);
-    aad[U64_BYTES..].copy_from_slice(nonce);
+    fill_array(&mut aad, &be_counter, nonce);
     let v = aes_gcm::Aes256Gcm::new_from_slice(content_key)?;
-    let mut xxxxx = Vec::new();
-    xxxxx.extend_from_slice(&chunk.encrypted_payload);
-    xxxxx.extend_from_slice(&chunk.tag);
+    let mut msg_and_tag = Vec::new();
+    msg_and_tag.extend_from_slice(&chunk.encrypted_payload);
+    msg_and_tag.extend_from_slice(&chunk.tag);
     let payload = Payload {
-        msg: &xxxxx,
+        msg: &msg_and_tag,
         aad: &aad,
     };
     let dec = v.decrypt(Nonce::from_slice(&chunk.nonce), payload).map_err(|e| anyhow!(e))?;
     Ok(dec)
 }
 
-fn decrypt_header(header: &FileHeader, cryptomator: &Cryptomator) -> Result<([u8; UNUSED_SIZE], CryptoAes256Key)> {
-    let v = aes_gcm::Aes256Gcm::new_from_slice(&cryptomator.encryption_master)?;
-    let mut payload = [0u8; ENCRYPTED_CONTENT_KEY + TAG_SIZE];
-    payload[..ENCRYPTED_CONTENT_KEY].copy_from_slice(&header.enc_content_key);
-    payload[ENCRYPTED_CONTENT_KEY..].copy_from_slice(&header.tag);
-    let payload = Payload::from(payload.as_slice());
-    let dec = v.decrypt(<&Nonce<_>>::from(&header.nonce), payload).map_err(|e| anyhow!(e))?;
-    let mut unused = [0; UNUSED_SIZE];
-    let mut content_key = [0; AES256KEY_BYTES];
-    unused.copy_from_slice(&dec[..UNUSED_SIZE]);
-    content_key.copy_from_slice(&dec[UNUSED_SIZE..]);
-    Ok((unused, content_key))
-}
 
-pub fn read_file_content<T: Read>(header: &FileHeader, reader: &mut T, cryptomator: &Cryptomator) -> Result<()> {
-    let (_, content_key) = decrypt_header(header, cryptomator)?;
-    for counter in 0.. {
-        let chunk=read_chunk(reader)?;
-        if chunk.is_none() { return Ok(()); }
-        let dec = decrypt_chunk(chunk.unwrap(), &content_key, counter, &header.nonce)?;
-        println!("Decrypted chunk:{:?} {:?}", dec, String::from_utf8_lossy(&dec));
-    }
-    unreachable!()
-}
 
 pub fn read_file_header<T: Read>(reader: &mut T) -> Result<FileHeader> {
     let mut header = FileHeader {
