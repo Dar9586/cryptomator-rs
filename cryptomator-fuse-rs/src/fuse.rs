@@ -91,29 +91,7 @@ fn getgid() -> u32 {
     unsafe { libc::getgid() }
 }
 
-fn get_dir_id(entry: &CryptoEntryType) -> &String {
-    match entry {
-        CryptoEntryType::Symlink { .. } => { panic!() }
-        CryptoEntryType::Directory { dir_id } => { dir_id }
-        CryptoEntryType::File { .. } => { panic!() }
-    }
-}
 
-fn get_file_path(entry: &CryptoEntryType) -> &PathBuf {
-    match entry {
-        CryptoEntryType::Symlink { .. } => { panic!() }
-        CryptoEntryType::Directory { .. } => { panic!() }
-        CryptoEntryType::File { abs_path } => { abs_path }
-    }
-}
-
-fn get_sym_target(entry: &CryptoEntryType) -> &String {
-    match entry {
-        CryptoEntryType::Symlink { target } => { target }
-        CryptoEntryType::Directory { .. } => { panic!() }
-        CryptoEntryType::File { .. } => { panic!() }
-    }
-}
 
 fn dir_to_file_attr(path: &CryptoEntryType) -> Result<FileAttr> {
     if let CryptoEntryType::Directory { .. } = path {
@@ -217,7 +195,7 @@ fn getattr(fuse: &mut CryptoFuse, _req: &Request<'_>, ino: u64, fh: Option<u64>)
 
 fn lookup(fuse: &mut CryptoFuse, _req: &Request<'_>, parent: u64, name: &OsStr) -> Result<FileAttr, c_int> {
     let x = fuse.cache.get(&parent).ok_or_else(|| EIO)?;
-    let dir_id = get_dir_id(x);
+    let dir_id = x.directory();
     let parent = DirId::from_str(dir_id, &fuse.crypto).map_err(|_| EIO)?;
     let name = name.to_str().unwrap();
     let child = parent.lookup(name).map_err(|_| EIO)?;
@@ -229,7 +207,7 @@ fn lookup(fuse: &mut CryptoFuse, _req: &Request<'_>, parent: u64, name: &OsStr) 
 
 fn readdir(fuse: &mut CryptoFuse, _req: &Request<'_>, ino: u64, fh: u64, offset: i64) -> Result<Vec<(u64, i64, FileType, String)>, c_int> {
     let x = fuse.cache.get(&ino).ok_or_else(|| EIO)?;
-    let dir_id = get_dir_id(x);
+    let dir_id = x.directory();
     let parent = DirId::from_str(dir_id, &fuse.crypto).map_err(|_| EIO)?;
     let mut files = parent.list_files().map_err(|_| EIO)?;
     files.sort_unstable_by(|o1, o2| o1.name.cmp(&o2.name));
@@ -246,7 +224,7 @@ fn readdir(fuse: &mut CryptoFuse, _req: &Request<'_>, ino: u64, fh: u64, offset:
 
 fn readlink<'a>(fuse: &'a mut CryptoFuse, _req: &Request<'_>, ino: u64) -> Result<&'a [u8], c_int> {
     let k = fuse.cache.get(&ino).ok_or_else(|| EIO)?;
-    let target = get_sym_target(k);
+    let target = k.symlink();
     Ok(target.as_bytes())
 }
 
@@ -261,7 +239,7 @@ fn read(fuse: &mut CryptoFuse, _req: &Request<'_>, _ino: u64, fh: u64, offset: i
 
 fn open(fuse: &mut CryptoFuse, _req: &Request<'_>, ino: u64, flags: i32) -> Result<u64, c_int> {
     let k = fuse.cache.get(&ino).ok_or_else(|| EIO)?;
-    let path = get_file_path(k);
+    let path = k.file();
     let mut options = File::options();
     if flags & libc::O_APPEND != 0 {
         options.append(true);

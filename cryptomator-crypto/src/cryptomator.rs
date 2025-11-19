@@ -1,48 +1,32 @@
+use crate::dir_id::DirId;
+use crate::seekable_reader::SeekableReader;
+use crate::seekable_writer::SeekableWriter;
+use crate::utils;
+use crate::utils::{CryptoAes256Key, CryptoNonce, CryptoTag, AES256KEY_BYTES, CLEAR_FILE_CHUNK_SIZE, ENCRYPTED_CONTENT_KEY, ENC_KEY_LENGTH, FILE_CHUNK_HEADERS_SIZE_U64, FILE_CHUNK_SIZE, FILE_HEADER_SIZE, KEK_KEY_LENGTH, MAC_KEY_LENGTH, NONCE_SIZE, SCRYPT_KEY_LENGTH, SCRYPT_PARALLELISM, TAG_SIZE, U64_BYTES, UNUSED_CONTENT, UNUSED_SIZE};
 use aes_gcm::aes::Aes256;
 use aes_gcm::{aead::{Aead, KeyInit}, Nonce};
 use aes_kw::Kek;
 use aes_siv::aead::generic_array::GenericArray;
 use aes_siv::aead::Payload;
 use anyhow::{anyhow, Result};
-use base32::Alphabet;
-use base64::Engine;
 use cmac::digest::consts::U64;
 use fallible_iterator::FallibleIterator;
 use hmac::digest::core_api::CoreWrapper;
 use hmac::{Hmac, Mac};
 use jwt::{Header, Token, VerifyWithKey};
+use rand::rngs::OsRng;
+use rand::TryRngCore;
 use scrypt::Params;
 use serde::{Deserialize, Serialize};
 use serde_with::base64::Base64;
 use serde_with::serde_as;
-use sha1::digest::Output;
-use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use std::fmt::Debug;
 use std::fs;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
-const CLEAR_FILE_CHUNK_SIZE: usize = 32768; //32 KiB
-const FILE_CHUNK_HEADERS_SIZE: usize = NONCE_SIZE + TAG_SIZE;
-const FILE_CHUNK_HEADERS_SIZE_U64: u64 = FILE_CHUNK_HEADERS_SIZE as u64;
-const FILE_CHUNK_SIZE: usize = CLEAR_FILE_CHUNK_SIZE + FILE_CHUNK_HEADERS_SIZE;
-const FILE_HEADER_SIZE: usize = NONCE_SIZE + ENCRYPTED_CONTENT_KEY + TAG_SIZE;
-const SCRYPT_PARALLELISM: u32 = 1;
-const SCRYPT_KEY_LENGTH: usize = 32;
-const DIRID_NAME_LENGTH: usize = 32;
-const KEK_KEY_LENGTH: usize = 32;
-const MAC_KEY_LENGTH: usize = 32;
-const ENC_KEY_LENGTH: usize = 32;
-const NONCE_SIZE: usize = 12;
-const U64_BYTES: usize = (u64::BITS / 8) as usize;
-const UNUSED_SIZE: usize = 8;
-const AES256KEY_BYTES: usize = 32;
-const TAG_SIZE: usize = 16;
-type CryptoNonce = [u8; NONCE_SIZE];
-type CryptoTag = [u8; TAG_SIZE];
-type CryptoAes256Key = [u8; AES256KEY_BYTES];
-const ENCRYPTED_CONTENT_KEY: usize = UNUSED_SIZE + AES256KEY_BYTES;
+
 pub struct CryptomatorOpen{
     pub vault_path: PathBuf,
     pub password: String,
@@ -54,7 +38,7 @@ pub struct Cryptomator {
     mac_master: [u8; SCRYPT_KEY_LENGTH],
     siv_key: GenericArray<u8, U64>,
     metadata: VaultMetadata,
-    vault_root: PathBuf,
+    pub(crate) vault_root: PathBuf,
 }
 
 impl Debug for Cryptomator {
@@ -66,8 +50,7 @@ impl Debug for Cryptomator {
     }
 }
 
-pub fn encrypted_file_size(path: &Path) -> Result<u64> {
-    let mut total_size = path.metadata()?.len();
+fn file_size_from_size(mut total_size: u64) -> Result<u64> {
     total_size = total_size.checked_sub_signed(FILE_HEADER_SIZE as i64).ok_or_else(|| anyhow!("Invalid file"))?;
     let blocks = total_size / FILE_CHUNK_SIZE as u64;
     let remainder = total_size - (blocks * FILE_CHUNK_SIZE as u64);
@@ -76,22 +59,27 @@ pub fn encrypted_file_size(path: &Path) -> Result<u64> {
         1..FILE_CHUNK_HEADERS_SIZE_U64 => { Err(anyhow!("Invalid file")) }
         _ => { Ok(blocks * CLEAR_FILE_CHUNK_SIZE as u64 + remainder - FILE_CHUNK_HEADERS_SIZE_U64) }
     }
+
 }
 
-#[derive(Debug)]
+pub fn encrypted_file_size_from_seekable<T: Seek>(reader: &mut T) -> Result<u64> {
+    let total_size = reader.seek(SeekFrom::End(0))?;
+    Ok(file_size_from_size(total_size)?)
+}
+
+pub fn encrypted_file_size(path: &Path) -> Result<u64> {
+    let total_size = path.metadata()?.len();
+    Ok(file_size_from_size(total_size)?)
+}
+
+#[derive(Debug, Copy, Clone)]
 pub struct FileHeader {
-    nonce: CryptoNonce,
+    pub nonce: CryptoNonce,
     enc_content_key: [u8; ENCRYPTED_CONTENT_KEY],
     tag: CryptoTag,
 }
 
-#[derive(Clone, Debug)]
-pub struct DirId<'a> {
-    pub unencrypted: String,
-    prefix: String,
-    suffix: String,
-    crypto: &'a Cryptomator,
-}
+
 
 pub struct FileDecrypt<'a, T: Read> {
     header: FileHeader,
@@ -108,54 +96,37 @@ pub enum EncryptedFilename {
 }
 
 impl EncryptedFilename {
-    fn to_name(&self) -> String {
+    pub(crate) fn to_path_name(&self) -> String {
         match self {
-            EncryptedFilename::Encrypted(s) => {
-                format!("{}.c9r", s)
-            }
-            EncryptedFilename::Compressed(s) => {
-                format!("{}.c9s", s)
-            }
+            EncryptedFilename::Encrypted(s) => format!("{}.c9r", s),
+            EncryptedFilename::Compressed(s) => format!("{}.c9s", s),
+        }
+    }
+    fn is_compressed(&self) -> bool {
+        matches!(self, EncryptedFilename::Compressed(_))
+    }
+    fn get_compressed(&self) -> &str {
+        match self {
+            EncryptedFilename::Encrypted(_) => panic!(),
+            EncryptedFilename::Compressed(e) => e,
+        }
+    }
+    fn get_encrypted(&self) -> &str {
+        match self {
+            EncryptedFilename::Encrypted(e) => e,
+            EncryptedFilename::Compressed(_) => panic!(),
         }
     }
 }
 
 #[derive(Debug, Default)]
-struct EncryptedFileChunk {
-    nonce: CryptoNonce,
-    encrypted_payload: Vec<u8>,
-    tag: CryptoTag,
+pub struct EncryptedFileChunk {
+    pub(crate) nonce: CryptoNonce,
+    pub(crate) encrypted_payload: Vec<u8>,
+    pub(crate) tag: CryptoTag,
 }
 
-pub struct SeekableReader<'a, 'b, T: Read + Seek> {
-    reader: &'b mut T,
-    header: FileHeader,
-    crypto: &'a Cryptomator,
-    content_key: CryptoAes256Key,
-}
 
-impl<'a, 'b, T: Read + Seek> SeekableReader<'a, 'b, T> {
-    pub fn read(&mut self, pos: usize, length: usize) -> Result<Vec<u8>> {
-        let block_start = pos / CLEAR_FILE_CHUNK_SIZE;
-        let block_count = length.div_ceil(CLEAR_FILE_CHUNK_SIZE);
-        let block_start_off = FILE_HEADER_SIZE + block_start * FILE_CHUNK_SIZE;
-        let pos_within_chunk = pos % CLEAR_FILE_CHUNK_SIZE;
-        self.reader.seek(SeekFrom::Start(block_start_off as u64))?;
-        let mut x = Vec::with_capacity(block_count * CLEAR_FILE_CHUNK_SIZE - pos_within_chunk);
-        for i in 0..block_count {
-            let counter = block_start + i;
-            let v = read_and_decrypt_chunk(&mut self.reader, &self.content_key, counter as u64, &self.header.nonce)?;
-            if v.is_none() { return Ok(x) }
-            let mut v = v.unwrap();
-            if i == 0 {
-                v.drain(..pos_within_chunk);
-            }
-            x.extend_from_slice(&v);
-        }
-        x.truncate(length);
-        Ok(x)
-    }
-}
 
 #[serde_as]
 #[derive(Serialize,Deserialize,Clone,Debug)]
@@ -183,23 +154,45 @@ struct VaultMetadata{
     shortening_threshold:u64
 }
 
-fn concat_vec<T:Clone>(v1:&[T], v2:&[T]) -> Vec<T>{
-    let mut res=Vec::with_capacity(v1.len()+v2.len());
-    res.extend_from_slice(v1);
-    res.extend_from_slice(v2);
-    res
+pub fn decrypt_chunk(chunk: EncryptedFileChunk, content_key: &CryptoAes256Key, counter: u64, nonce: &CryptoNonce) -> Result<Vec<u8>> {
+    let be_counter = counter.to_be_bytes();
+    let mut aad = [0; U64_BYTES + NONCE_SIZE];
+    utils::fill_array(&mut aad, &be_counter, nonce);
+    let v = aes_gcm::Aes256Gcm::new_from_slice(content_key)?;
+    let mut msg_and_tag = Vec::new();
+    msg_and_tag.extend_from_slice(&chunk.encrypted_payload);
+    msg_and_tag.extend_from_slice(&chunk.tag);
+    let payload = Payload {
+        msg: &msg_and_tag,
+        aad: &aad,
+    };
+    let dec = v.decrypt(Nonce::from_slice(&chunk.nonce), payload).map_err(|e| anyhow!(e))?;
+    Ok(dec)
 }
 
-fn fill_array<T: Copy>(v: &mut [T], v1: &[T], v2: &[T]) {
-    v[..v1.len()].copy_from_slice(v1);
-    v[v1.len()..].copy_from_slice(v2);
-}
+pub fn encrypt_chunk(data: &[u8], offset: u64, header_nonce: &CryptoNonce, content_key: &CryptoAes256Key) -> Result<EncryptedFileChunk> {
+    let be_offset = offset.to_be_bytes();
+    let mut tag = [0u8; TAG_SIZE];
+    let mut chunk_nonce = [0u8; NONCE_SIZE];
+    let mut aad = [0u8; U64_BYTES + NONCE_SIZE];
+    utils::fill_array(&mut aad, &be_offset, header_nonce);
+    OsRng.try_fill_bytes(&mut chunk_nonce)?;
 
-fn split_array<T: Copy>(v: &[T], v1: &mut [T], v2: &mut [T]) {
-    v1.copy_from_slice(&v[..v1.len()]);
-    v2.copy_from_slice(&v[v1.len()..]);
+    let v = aes_gcm::Aes256Gcm::new_from_slice(content_key)?;
+    let payload = Payload {
+        msg: data,
+        aad: &aad,
+    };
+    let mut dec = v.encrypt(<&Nonce<_>>::from(&chunk_nonce), payload).map_err(|e| anyhow!(e))?;
+    assert_eq!(dec.len(), data.len() + TAG_SIZE);
+    tag.copy_from_slice(&dec[dec.len() - TAG_SIZE..]);
+    dec.truncate(dec.len() - TAG_SIZE);
+    Ok(EncryptedFileChunk {
+        nonce: chunk_nonce,
+        encrypted_payload: dec,
+        tag,
+    })
 }
-
 impl CryptomatorOpen{
     pub fn open(&self)->Result<Cryptomator>{
         let masterkey_path=self.vault_path.join("masterkey.cryptomator");
@@ -218,11 +211,11 @@ impl CryptomatorOpen{
         let kek=Kek::from(kek_key);
         kek.unwrap(&masterkey.primary_master_key,&mut encryption_master).unwrap();
         kek.unwrap(&masterkey.hmac_master_key,&mut mac_master).unwrap();
-        let supreme_key=concat_vec(&encryption_master,&mac_master);
+        let supreme_key = utils::concat_vec(&encryption_master, &mac_master);
         let key: Hmac<Sha256> = <CoreWrapper<_> as Mac>::new_from_slice(&supreme_key)?;
         let token: Token<Header, VaultMetadata, _> = vault_content.verify_with_key(&key)?;
         let mut siv_key = [0u8; MAC_KEY_LENGTH + ENC_KEY_LENGTH];
-        fill_array(&mut siv_key, &mac_master, &encryption_master);
+        utils::fill_array(&mut siv_key, &mac_master, &encryption_master);
         Ok(Cryptomator{
             siv_key:GenericArray::from(siv_key),
             encryption_master,
@@ -234,7 +227,7 @@ impl CryptomatorOpen{
 }
 
 impl Cryptomator {
-    fn aes_siv_enc(&self, data: &[u8], dir_id: Option<&DirId>) -> Result<Vec<u8>> {
+    pub(crate) fn aes_siv_enc(&self, data: &[u8], dir_id: Option<&DirId>) -> Result<Vec<u8>> {
         let mut siv: aes_siv::siv::Siv<Aes256, cmac::Cmac<Aes256>> = aes_siv::siv::Siv::new(&self.siv_key); //::new(&GenericArray::from(supreme_key));
         Ok(match dir_id {
             Some(dir_id) => { siv.encrypt::<_, _>(&[dir_id.unencrypted.as_bytes()], data) }
@@ -250,20 +243,20 @@ impl Cryptomator {
         }.map_err(|e| anyhow!(e))?)
     }
 
-    pub fn filename_encrypt(&self, name: &str, parent: &DirId) -> Result<EncryptedFilename> {
+    pub fn filename_encrypt(&self, name: &str, parent: &DirId, force_enc: bool) -> Result<EncryptedFilename> {
         let siv = self.aes_siv_enc(name.nfc().to_string().as_bytes(), Some(parent))?;
-        let name = base64_enc(&siv);
-        Ok(if name.len() + ".c9r".len() > self.metadata.shortening_threshold as usize {
+        let name = utils::base64_enc(&siv);
+        Ok(if !force_enc && name.len() + EXTENSION_LENGTH > self.metadata.shortening_threshold as usize {
             let xx = format!("{}.c9r", name);
-            let n = sha1(xx.as_bytes());
-            EncryptedFilename::Compressed(base64_enc(&n))
+            let n = utils::sha1(xx.as_bytes());
+            EncryptedFilename::Compressed(utils::base64_enc(&n))
         } else {
             EncryptedFilename::Encrypted(name)
         })
     }
 
     pub fn filename_decrypt(&self, name: &str, parent: &DirId) -> Result<String> {
-        let x = base64_dec(name)?;
+        let x = utils::base64_dec(name)?;
         let siv = self.aes_siv_dec(&x, Some(parent))?;
         let sss = String::from_utf8(siv)?;
         Ok(sss)
@@ -276,12 +269,12 @@ impl Cryptomator {
     fn decrypt_header(&self, header: &FileHeader) -> Result<([u8; UNUSED_SIZE], CryptoAes256Key)> {
         let v = aes_gcm::Aes256Gcm::new_from_slice(&self.encryption_master)?;
         let mut payload = [0u8; ENCRYPTED_CONTENT_KEY + TAG_SIZE];
-        fill_array(&mut payload, &header.enc_content_key, &header.tag);
+        utils::fill_array(&mut payload, &header.enc_content_key, &header.tag);
         let payload = Payload::from(payload.as_slice());
         let dec = v.decrypt(<&Nonce<_>>::from(&header.nonce), payload).map_err(|e| anyhow!(e))?;
         let mut unused = [0; UNUSED_SIZE];
         let mut content_key = [0; AES256KEY_BYTES];
-        split_array(&dec, &mut unused, &mut content_key);
+        utils::split_array(&dec, &mut unused, &mut content_key);
         Ok((unused, content_key))
     }
 
@@ -291,7 +284,7 @@ impl Cryptomator {
         Ok(FileDecrypt::new(header, reader, content_key))
     }
 
-    fn read_entire_content<T: Read>(&self, reader: &mut T) -> Result<Vec<u8>> {
+    pub(crate) fn read_entire_content<T: Read>(&self, reader: &mut T) -> Result<Vec<u8>> {
         let x = self.read_file_content(reader)?;
         let mut v = Vec::new();
         for x in x.iterator() {
@@ -311,6 +304,68 @@ impl Cryptomator {
             crypto: self,
         })
     }
+
+    pub fn create_file_header(&self) -> Result<(FileHeader, CryptoAes256Key)> {
+        let mut tag = [0u8; TAG_SIZE];
+        let mut nonce = [0u8; NONCE_SIZE];
+        let mut content_key = [0u8; AES256KEY_BYTES];
+        let mut cleartext_payload = [0u8; AES256KEY_BYTES + UNUSED_SIZE];
+        OsRng.try_fill_bytes(&mut nonce)?;
+        OsRng.try_fill_bytes(&mut content_key)?;
+        utils::fill_array(&mut cleartext_payload, &UNUSED_CONTENT, &content_key);
+
+        let v = aes_gcm::Aes256Gcm::new_from_slice(&self.encryption_master)?;
+        let dec = v.encrypt(<&Nonce<_>>::from(&nonce), cleartext_payload.as_slice()).map_err(|e| anyhow!(e))?;
+        utils::split_array(&dec, &mut cleartext_payload, &mut tag);
+        Ok((FileHeader {
+            nonce,
+            enc_content_key: cleartext_payload,
+            tag,
+        }, content_key))
+    }
+
+    pub fn file_writer<'a, 'b, T: Read + Write + Seek>(&'a self, writer: &'b mut T) -> Result<SeekableWriter<'a, 'b, T>> {
+        writer.seek(SeekFrom::Start(0))?;
+        let header = read_file_header(writer)?;
+        let (_, content_key) = self.decrypt_header(&header)?;
+        Ok(SeekableWriter {
+            writer,
+            header,
+            content_key,
+            crypto: self,
+        })
+    }
+
+    fn write_header<T: Write>(&self, writer: &mut T) -> Result<(FileHeader, CryptoAes256Key)> {
+        let (header, content_key) = self.create_file_header()?;
+        writer.write(header.nonce.as_slice())?;
+        writer.write(header.enc_content_key.as_slice())?;
+        writer.write(header.tag.as_slice())?;
+        writer.flush()?;
+        Ok((header, content_key))
+    }
+
+    fn write_uncompressed_name(&self, dir_id: &DirId, name: &str, compressed_name: &str) -> Result<()> {
+        let encrypted = self.filename_encrypt(name, dir_id, true)?;
+        let dir_path = dir_id.path().join(compressed_name);
+        let file_name_path = dir_path.join("name.c9s");
+        fs::create_dir_all(&dir_path)?;
+        fs::write(&file_name_path, &encrypted.to_path_name())?;
+
+        Ok(())
+    }
+    pub fn create_file(&self, dir_id: &DirId, name: &str) -> Result<CryptoEntry> {
+        let v = self.filename_encrypt(name, dir_id, false)?;
+        let enc_name = v.to_path_name();
+        let mut path = dir_id.path().join(&enc_name);
+        if v.is_compressed() {
+            self.write_uncompressed_name(dir_id, name, &enc_name)?;
+            path = path.join("contents.c9r");
+        }
+        let mut f = BufWriter::new(fs::File::create(&path)?);
+        self.write_header(&mut f)?;
+        Ok(CryptoEntry { name: name.to_string(), entry_type: CryptoEntryType::File { abs_path: path } })
+    }
 }
 
 
@@ -320,7 +375,7 @@ impl<'a, T: Read> FileDecrypt<'a, T> {
     }
 }
 
-fn read_and_decrypt_chunk<T: Read>(reader: &mut T, content_key: &CryptoAes256Key, counter: u64, nonce: &CryptoNonce) -> Result<Option<Vec<u8>>> {
+pub(crate) fn read_and_decrypt_chunk<T: Read>(reader: &mut T, content_key: &CryptoAes256Key, counter: u64, nonce: &CryptoNonce) -> Result<Option<Vec<u8>>> {
     let chunk = read_chunk(reader)?;
     if chunk.is_none() { return Ok(None); }
     let chunk = chunk.unwrap();
@@ -358,163 +413,42 @@ impl<T: Read> FallibleIterator for FileDecrypt<'_, T> {
     }
 }
 
-fn sha1(data: &[u8]) -> Output<Sha1> {
-    let mut hasher = Sha1::new();
-    hasher.update(&data);
-    hasher.finalize()
-}
-
-fn base32_enc(data: &[u8]) -> String {
-    base32::encode(Alphabet::Rfc4648 { padding: true }, &data)
-}
-
-fn base32_dec(data: &str) -> Result<Vec<u8>> {
-    Ok(base32::decode(Alphabet::Rfc4648 { padding: true }, data)
-        .ok_or_else(|| anyhow!("Base32 decode error"))?)
-}
-
-fn base64_enc(data: &[u8]) -> String {
-    base64::prelude::BASE64_URL_SAFE.encode(data)
-}
-
-fn base64_dec(data: &str) -> Result<Vec<u8>> {
-    Ok(base64::prelude::BASE64_URL_SAFE.decode(data)?)
-}
 #[derive(Debug, Clone, Hash)]
 pub enum CryptoEntryType {
     Symlink { target: String },
     Directory { dir_id: String },
     File { abs_path: PathBuf },
 }
+
+impl CryptoEntryType {
+    pub fn directory(&self) -> &String {
+        match self {
+            CryptoEntryType::Directory { dir_id } => { dir_id }
+            _ => { panic!() }
+        }
+    }
+
+    pub fn file(&self) -> &PathBuf {
+        match self {
+            CryptoEntryType::File { abs_path } => { abs_path }
+            _ => { panic!() }
+        }
+    }
+
+    pub fn symlink(&self) -> &String {
+        match self {
+            CryptoEntryType::Symlink { target } => { target }
+            _ => { panic!() }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Hash)]
 pub struct CryptoEntry {
     pub name: String,
     pub entry_type: CryptoEntryType,
 }
-const EXTENSION_LENGTH: usize = ".c9s".len();
-
-impl<'a> DirId<'a>{
-    fn try_read_dir(&self, abs_path: &Path, dec_name: &str) -> Result<Option<CryptoEntry>> {
-        let sub_dir_path = abs_path.join("dir.c9r");
-        if !sub_dir_path.exists() { return Ok(None); }
-        let dir_id = fs::read_to_string(sub_dir_path)?;
-        Ok(Some(CryptoEntry {
-            name: dec_name.to_string(),
-            entry_type: CryptoEntryType::Directory { dir_id },
-        }))
-    }
-
-    fn try_read_sym(&self, abs_path: &Path, dec_name: &str) -> Result<Option<CryptoEntry>> {
-        let sub_sym_path = abs_path.join("symlink.c9r");
-        if !sub_sym_path.exists() { return Ok(None); }
-        let mut reader = BufReader::new(fs::File::open(&sub_sym_path)?);
-        let target = self.crypto.read_entire_content(&mut reader)?;
-        let target = String::from_utf8(target)?;
-        Ok(Some(CryptoEntry {
-            name: dec_name.to_string(),
-            entry_type: CryptoEntryType::Symlink { target },
-        }))
-    }
-
-    fn try_read_file(&self, abs_path: &Path, dec_name: &str) -> Result<Option<CryptoEntry>> {
-        let file_file = abs_path.join("contents.c9r");
-        if !file_file.exists() { return Ok(None); }
-        Ok(Some(CryptoEntry {
-            name: dec_name.to_string(),
-            entry_type: CryptoEntryType::File { abs_path: file_file },
-        }))
-    }
-
-    pub fn lookup(&self, unencrypted_name: &str) -> Result<Option<CryptoEntry>> {
-        let encrypted_name = self.crypto.filename_encrypt(unencrypted_name, self)?;
-        self.lookup_enc(&encrypted_name.to_name())
-    }
-
-    fn lookup_enc(&self, name: &str) -> Result<Option<CryptoEntry>> {
-        let abs_path = self.path().join(&name);
-        if !abs_path.exists() { return Ok(None); }
-        let meta = abs_path.metadata()?;
-        let entry_type = meta.file_type();
-        let name_no_ext = &name[..name.len() - EXTENSION_LENGTH];
-        if entry_type.is_file() {
-            Ok(Some(self.parse_file(abs_path, name_no_ext)?))
-        } else if entry_type.is_dir() {
-            Ok(Some(self.parse_dir(&name, &abs_path, name_no_ext)?))
-        } else {
-            Err(anyhow!("'{}': {:?} is not a file or directory",name, entry_type))
-        }
-    }
-
-    pub fn list_files(&self) -> Result<Vec<CryptoEntry>> {
-        let mut entries = Vec::new();
-        let dir_path = self.path();
-        for entry in fs::read_dir(&dir_path)? {
-            let entry = entry?;
-            let name = entry.file_name();
-            let name = name.to_str().ok_or_else(|| anyhow!("invalid name"))?;
-            if name == "dirid.c9r" {
-                continue;
-            }
-            if let Some(entry) = self.lookup_enc(name)? {
-                entries.push(entry);
-            }
-        }
-        Ok(entries)
-    }
-
-    fn parse_dir(&self, name: &str, abs_path: &PathBuf, name_no_ext: &str) -> Result<CryptoEntry> {
-        let compressed = name.ends_with(".c9s");
-        if !compressed {
-            let dec_name = self.crypto.filename_decrypt(name_no_ext, self)?;
-            if let Some(x) = self.try_read_dir(&abs_path, &dec_name)? {
-                Ok(x)
-            } else if let Some(x) = self.try_read_sym(&abs_path, &dec_name)? {
-                Ok(x)
-            } else {
-                Err(anyhow!("invalid file '{}'",dec_name))
-            }
-        } else {
-            let name_file = abs_path.join("name.c9s");
-            let uncompressed_name = fs::read_to_string(&name_file)?;
-            let dec_name = self.crypto.filename_decrypt(&uncompressed_name[..uncompressed_name.len() - EXTENSION_LENGTH], self)?;
-            if let Some(x) = self.try_read_dir(&abs_path, &dec_name)? {
-                Ok(x)
-            } else if let Some(x) = self.try_read_sym(&abs_path, &dec_name)? {
-                Ok(x)
-            } else if let Some(x) = self.try_read_file(&abs_path, &dec_name)? {
-                Ok(x)
-            } else {
-                Err(anyhow!("invalid file '{}'",dec_name))
-            }
-        }
-    }
-
-    fn parse_file(&self, abs_path: PathBuf, name_no_ext: &str) -> Result<CryptoEntry> {
-        let name = self.crypto.filename_decrypt(name_no_ext, self)?;
-        Ok(CryptoEntry {
-            name,
-            entry_type: CryptoEntryType::File { abs_path },
-        })
-    }
-
-    pub fn path(&self) -> PathBuf{
-        self.crypto.vault_root.join("d").join(&self.prefix).join(&self.suffix)
-    }
-
-    pub fn from_str(str:&str,crypto:&'a Cryptomator)->Result<Self>{
-        let siv = crypto.aes_siv_enc(str.as_bytes(), None)?;
-        let sha = sha1(&siv);
-        let mut encoded = base32_enc(&sha);
-        assert_eq!(encoded.len(),DIRID_NAME_LENGTH);
-        let suffix=encoded.split_off(2);
-        Ok(Self{
-            unencrypted:str.to_string(),
-            prefix:encoded,
-            suffix,
-            crypto
-        })
-    }
-}
+pub(crate) const EXTENSION_LENGTH: usize = ".c9s".len();
 
 
 impl From<&[u8]> for EncryptedFileChunk {
@@ -548,22 +482,6 @@ fn read_chunk<T: Read>(reader: &mut T) -> Result<Option<EncryptedFileChunk>> {
     }
 }
 
-fn decrypt_chunk(chunk: EncryptedFileChunk, content_key: &CryptoAes256Key, counter: u64, nonce: &CryptoNonce) -> Result<Vec<u8>> {
-    let be_counter = counter.to_be_bytes();
-    let mut aad = [0; U64_BYTES + NONCE_SIZE];
-    fill_array(&mut aad, &be_counter, nonce);
-    let v = aes_gcm::Aes256Gcm::new_from_slice(content_key)?;
-    let mut msg_and_tag = Vec::new();
-    msg_and_tag.extend_from_slice(&chunk.encrypted_payload);
-    msg_and_tag.extend_from_slice(&chunk.tag);
-    let payload = Payload {
-        msg: &msg_and_tag,
-        aad: &aad,
-    };
-    let dec = v.decrypt(Nonce::from_slice(&chunk.nonce), payload).map_err(|e| anyhow!(e))?;
-    Ok(dec)
-}
-
 
 
 pub fn read_file_header<T: Read>(reader: &mut T) -> Result<FileHeader> {
@@ -577,4 +495,5 @@ pub fn read_file_header<T: Read>(reader: &mut T) -> Result<FileHeader> {
     reader.read_exact(&mut header.tag)?;
     Ok(header)
 }
+
 
