@@ -1,7 +1,6 @@
 use aes_siv::aead;
 use hmac::digest::InvalidLength;
 use rand::rand_core::OsError;
-use std::fmt::Display;
 use thiserror::Error;
 
 #[derive(Error, Debug)]

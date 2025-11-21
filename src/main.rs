@@ -18,7 +18,7 @@ impl MyType {
 fn main() ->Result<()>{
     tracing_subscriber::fmt()
         .with_span_events(FmtSpan::ENTER)
-        .with_env_filter("debug")  // or "debug", or "mycrate=trace"
+        .with_env_filter("info")  // or "debug", or "mycrate=trace"
         .init();    // REQUIRED: set up logging
 
 

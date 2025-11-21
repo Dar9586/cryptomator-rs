@@ -278,6 +278,7 @@ dependencies = [
  "fuser",
  "libc",
  "lru",
+ "once_cell",
  "tracing",
  "tracing-attributes",
 ]

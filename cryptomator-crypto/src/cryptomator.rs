@@ -38,7 +38,6 @@ pub struct CryptomatorOpen{
 #[derive(Clone)]
 pub struct Cryptomator {
     encryption_master: [u8; SCRYPT_KEY_LENGTH],
-    mac_master: [u8; SCRYPT_KEY_LENGTH],
     siv_key: GenericArray<u8, U64>,
     metadata: VaultMetadata,
     pub(crate) vault_root: PathBuf,
@@ -106,16 +105,16 @@ impl EncryptedFilename {
             EncryptedFilename::Compressed(s) => format!("{}.c9s", s),
         }
     }
-    fn is_compressed(&self) -> bool {
+    pub fn is_compressed(&self) -> bool {
         matches!(self, EncryptedFilename::Compressed(_))
     }
-    fn get_compressed(&self) -> &str {
+    pub fn get_compressed(&self) -> &str {
         match self {
             EncryptedFilename::Encrypted(_) => panic!(),
             EncryptedFilename::Compressed(e) => e,
         }
     }
-    fn get_encrypted(&self) -> &str {
+    pub fn get_encrypted(&self) -> &str {
         match self {
             EncryptedFilename::Encrypted(e) => e,
             EncryptedFilename::Compressed(_) => panic!(),
@@ -223,7 +222,6 @@ impl CryptomatorOpen{
         Ok(Cryptomator{
             siv_key:GenericArray::from(siv_key),
             encryption_master,
-            mac_master,
             metadata:token.claims().clone(),
             vault_root:self.vault_path.clone()
         })
@@ -236,8 +234,6 @@ impl Cryptomator {
         if old_entry.is_none() { return Ok(None); }
         let old_entry = old_entry.unwrap().entry_type;
         let new_entry = old_dir.lookup(old_name)?.map(|e| e.entry_type);
-        let old_enc_name = self.filename_encrypt(old_name, new_dir, false)?;
-        let new_enc_name = self.filename_encrypt(new_name, new_dir, false)?;
         if new_entry.is_some() {
             if no_replace {
                 return Err(UnixError(libc::EEXIST));
@@ -257,7 +253,7 @@ impl Cryptomator {
                 self.create_directory_with_dir_id(new_dir, new_name, &dir_id)?;
             }
             CryptoEntryType::File { abs_path } => {
-                let new_file = self.create_file(new_dir, new_name)?;;
+                let new_file = self.create_file(new_dir, new_name)?;
                 fs::rename(abs_path, new_file.entry_type.file())?;
                 self.delete_fs(&old_dir, old_name)?;
             }
@@ -415,7 +411,7 @@ impl Cryptomator {
         Ok(v)
     }
 
-    pub fn read_seek<'a, 'b, T: Read + Seek>(&'a self, reader: &'b mut T) -> Result<SeekableReader<'a, 'b, T>> {
+    pub fn read_seek<'a, 'b, T: Read + Seek>(&'a self, reader: &'b mut T) -> Result<SeekableReader<'b, T>> {
         reader.seek(SeekFrom::Start(0))?;
         let header = read_file_header(reader)?;
         let (_, content_key) = self.decrypt_header(&header)?;
@@ -423,7 +419,6 @@ impl Cryptomator {
             reader,
             header,
             content_key,
-            crypto: self,
         })
     }
 
@@ -446,7 +441,7 @@ impl Cryptomator {
         }, content_key))
     }
 
-    pub fn file_writer<'a, 'b, T: Read + Write + Seek>(&'a self, writer: &'b mut T) -> Result<SeekableWriter<'a, 'b, T>> {
+    pub fn file_writer<'a, 'b, T: Read + Write + Seek>(&'a self, writer: &'b mut T) -> Result<SeekableWriter<'b, T>> {
         writer.seek(SeekFrom::Start(0))?;
         let header = read_file_header(writer)?;
         let (_, content_key) = self.decrypt_header(&header)?;
@@ -454,7 +449,6 @@ impl Cryptomator {
             writer,
             header,
             content_key,
-            crypto: self,
         })
     }
 

@@ -1,16 +1,15 @@
 use crate::errors::Result;
-use crate::{Cryptomator, FileHeader};
+use crate::FileHeader;
 use log::debug;
 use std::io::{Read, Seek, SeekFrom};
 
-pub struct SeekableReader<'a, 'b, T: Read + Seek> {
+pub struct SeekableReader<'b, T: Read + Seek> {
     pub(crate) reader: &'b mut T,
     pub(crate) header: FileHeader,
-    pub(crate) crypto: &'a Cryptomator,
     pub(crate) content_key: crate::utils::CryptoAes256Key,
 }
 
-impl<'a, 'b, T: Read + Seek> SeekableReader<'a, 'b, T> {
+impl<'b, T: Read + Seek> SeekableReader<'b, T> {
     pub fn read(&mut self, pos: usize, length: usize) -> Result<Vec<u8>> {
         debug!("Reading {} bytes from offset {}", length, pos);
         if length == 0 { return Ok(vec![]); }

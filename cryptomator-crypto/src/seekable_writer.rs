@@ -1,21 +1,20 @@
 use crate::errors::Result;
 use crate::seekable_reader::SeekableReader;
 use crate::utils::{CLEAR_FILE_CHUNK_SIZE, FILE_CHUNK_SIZE, FILE_HEADER_SIZE};
-use crate::{encrypted_file_size_from_seekable, Cryptomator, FileHeader};
+use crate::{encrypted_file_size_from_seekable, FileHeader};
 use itertools::repeat_n;
 use log::debug;
 use std::io::{Read, Seek, SeekFrom, Write};
 
-pub struct SeekableWriter<'a, 'b, T: Read + Write + Seek> {
+pub struct SeekableWriter<'b, T: Read + Write + Seek> {
     pub(crate) writer: &'b mut T,
     pub(crate) header: FileHeader,
-    pub(crate) crypto: &'a Cryptomator,
     pub(crate) content_key: crate::utils::CryptoAes256Key,
 }
 
 const HOLE_BLOCKS_PER_ITER: usize = 2;
 
-impl<'a, 'b, T: Read + Write + Seek> SeekableWriter<'a, 'b, T> {
+impl<'a, 'b, T: Read + Write + Seek> SeekableWriter<'b, T> {
     pub fn write(&mut self, start_pos: usize, data: &[u8]) -> Result<()> {
         debug!("Writing {} bytes from offset {}", data.len(), start_pos);
         if data.len() == 0 { return Ok(()); }
@@ -36,7 +35,6 @@ impl<'a, 'b, T: Read + Write + Seek> SeekableWriter<'a, 'b, T> {
         let mut reader = SeekableReader {
             reader: self.writer,
             header: self.header,
-            crypto: self.crypto,
             content_key: self.content_key,
         };
         let mut before = if start_pos % CLEAR_FILE_CHUNK_SIZE == 0 && data.len() >= CLEAR_FILE_CHUNK_SIZE { vec![] } else {
