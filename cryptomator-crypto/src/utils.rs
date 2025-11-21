@@ -1,5 +1,6 @@
+use crate::errors;
+use crate::errors::CryptoError;
 use aes_gcm::aes::cipher::crypto_common::Output;
-use anyhow::anyhow;
 use base32::Alphabet;
 use base64::Engine;
 use cmac::digest::Digest;
@@ -26,6 +27,7 @@ pub(crate) type CryptoNonce = [u8; NONCE_SIZE];
 pub(crate) type CryptoTag = [u8; TAG_SIZE];
 pub(crate) type CryptoAes256Key = [u8; AES256KEY_BYTES];
 pub(crate) const ENCRYPTED_CONTENT_KEY: usize = UNUSED_SIZE + AES256KEY_BYTES;
+pub(crate) type DirIdData = Vec<u8>;
 
 pub(crate) fn concat_vec<T: Clone>(v1: &[T], v2: &[T]) -> Vec<T> {
     let mut res = Vec::with_capacity(v1.len() + v2.len());
@@ -54,15 +56,10 @@ pub(crate) fn base32_enc(data: &[u8]) -> String {
     base32::encode(Alphabet::Rfc4648 { padding: true }, &data)
 }
 
-pub(crate) fn base32_dec(data: &str) -> anyhow::Result<Vec<u8>> {
-    Ok(base32::decode(Alphabet::Rfc4648 { padding: true }, data)
-        .ok_or_else(|| anyhow!("Base32 decode error"))?)
-}
-
 pub(crate) fn base64_enc(data: &[u8]) -> String {
     base64::prelude::BASE64_URL_SAFE.encode(data)
 }
 
-pub(crate) fn base64_dec(data: &str) -> anyhow::Result<Vec<u8>> {
-    Ok(base64::prelude::BASE64_URL_SAFE.decode(data)?)
+pub(crate) fn base64_dec(data: &str) -> errors::Result<Vec<u8>> {
+    Ok(base64::prelude::BASE64_URL_SAFE.decode(data).map_err(|_| CryptoError::CorruptedFilename)?)
 }

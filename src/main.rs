@@ -1,9 +1,6 @@
 #![allow(dead_code, unused_variables, unused_imports)]
 
 use anyhow::Result;
-use cryptomator_crypto::{decrypt_chunk, encrypt_chunk, DirId, Seekable};
-use std::fs;
-use std::fs::File;
 use std::path::PathBuf;
 use tracing::instrument;
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -29,7 +26,7 @@ fn main() ->Result<()>{
         vault_path: PathBuf::from("/home/dar9586/Test/"),
         password: "ciaociao".to_string(),
     }.open()?;
-    let (header, content_key) = mator.create_file_header()?;
+    /*let (header, content_key) = mator.create_file_header()?;
     let data = [0u8; 32];
     let encrypted = encrypt_chunk(&data, 0, &header.nonce, &content_key)?;
     println!("{:?}", encrypted);
@@ -52,7 +49,7 @@ fn main() ->Result<()>{
     for chunk in mator.read_file_content(&mut reader)?.into_iter() {
         chunk?;
     }
-
+*/
 
     /*
 
@@ -82,19 +79,18 @@ fn main() ->Result<()>{
         exit(0);
 
      */
-    /*
-    
-        let fuse = cryptomator_fuse_rs::CryptoFuse::new(mator);
+
+
+    let fuse = cryptomator_fuse_rs::CryptoFuse::new(mator);
         cryptomator_fuse_rs::mount2(
             fuse,
             PathBuf::from("/home/dar9586/Programmazione/Progetti/Rust/cryptomator-cli-rs/mount"),
             &[
-                cryptomator_fuse_rs::MountOption::RO,
+                cryptomator_fuse_rs::MountOption::RW,
                 cryptomator_fuse_rs::MountOption::AutoUnmount,
                 cryptomator_fuse_rs::MountOption::AllowRoot,
             ],
         )?;
-        */
 
 
     Ok(())

@@ -1,3 +1,4 @@
+use crate::errors::Result;
 use crate::seekable_reader::SeekableReader;
 use crate::utils::{CLEAR_FILE_CHUNK_SIZE, FILE_CHUNK_SIZE, FILE_HEADER_SIZE};
 use crate::{encrypted_file_size_from_seekable, Cryptomator, FileHeader};
@@ -15,7 +16,7 @@ pub struct SeekableWriter<'a, 'b, T: Read + Write + Seek> {
 const HOLE_BLOCKS_PER_ITER: usize = 2;
 
 impl<'a, 'b, T: Read + Write + Seek> SeekableWriter<'a, 'b, T> {
-    pub fn write(&mut self, start_pos: usize, data: &[u8]) -> anyhow::Result<()> {
+    pub fn write(&mut self, start_pos: usize, data: &[u8]) -> Result<()> {
         debug!("Writing {} bytes from offset {}", data.len(), start_pos);
         if data.len() == 0 { return Ok(()); }
         let mut total_size = encrypted_file_size_from_seekable(&mut self.writer)? as usize;

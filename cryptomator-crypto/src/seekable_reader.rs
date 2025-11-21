@@ -1,3 +1,4 @@
+use crate::errors::Result;
 use crate::{Cryptomator, FileHeader};
 use log::debug;
 use std::io::{Read, Seek, SeekFrom};
@@ -10,7 +11,7 @@ pub struct SeekableReader<'a, 'b, T: Read + Seek> {
 }
 
 impl<'a, 'b, T: Read + Seek> SeekableReader<'a, 'b, T> {
-    pub fn read(&mut self, pos: usize, length: usize) -> anyhow::Result<Vec<u8>> {
+    pub fn read(&mut self, pos: usize, length: usize) -> Result<Vec<u8>> {
         debug!("Reading {} bytes from offset {}", length, pos);
         if length == 0 { return Ok(vec![]); }
         let block_start = pos / crate::utils::CLEAR_FILE_CHUNK_SIZE;
