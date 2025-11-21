@@ -27,6 +27,7 @@ use std::fmt::{Debug, Formatter};
 use std::fs;
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use libc::EEXIST;
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
@@ -250,7 +251,7 @@ impl Cryptomator {
                 self.create_directory_with_dir_id(new_dir, new_name, &dir_id)?;
             }
             CryptoEntryType::File { abs_path } => {
-                let new_file = self.create_file(new_dir, new_name)?;
+                let new_file = self.create_file(new_dir, new_name,true)?;
                 fs::rename(abs_path, new_file.entry_type.file())?;
                 self.delete_fs(old_dir, old_name)?;
             }
@@ -331,7 +332,7 @@ impl Cryptomator {
 
     fn write_dirid_file(&self, parent: &DirId, child: &DirId) -> Result<()> {
         let child_dir_id_file = child.path().join("dirid.c9r");
-        let mut f = Seekable::from_file(fs::File::create(&child_dir_id_file)?)?;
+        let mut f = Seekable::from_path(&child_dir_id_file,true)?;
         self.write_header(&mut f)?;
         let mut writer = self.file_writer(&mut f)?;
         writer.write(0, &parent.unencrypted)?;
@@ -347,7 +348,7 @@ impl Cryptomator {
         }
         // write symlink.c9r with the target
         let parent_dir_id_file = parent_path_entry.join("symlink.c9r");
-        let mut f = Seekable::from_file(fs::File::create(&parent_dir_id_file)?)?;
+        let mut f = Seekable::from_path(&parent_dir_id_file,true)?;
         self.write_header(&mut f)?;
         let mut writer = self.file_writer(&mut f)?;
         writer.write(0, target.as_bytes())?;
@@ -467,7 +468,14 @@ impl Cryptomator {
         Ok(())
     }
 
-    pub fn create_file(&self, dir_id: &DirId, name: &str) -> Result<CryptoEntry> {
+    pub fn create_file(&self, dir_id: &DirId, name: &str,exclusive:bool) -> Result<CryptoEntry> {
+        if let Some(e)=dir_id.lookup(name)?{
+            return if exclusive{
+                 Err(UnixError(EEXIST))
+            }else{
+                Ok(e)
+            }
+        }
         let v = self.filename_encrypt(name, dir_id, false)?;
         let enc_name = v.to_path_name();
         let mut path = dir_id.path().join(&enc_name);

@@ -27,12 +27,16 @@ pub enum CryptoError {
 
 impl CryptoError {
     pub fn to_errno(&self) -> Option<i32> {
-        match self {
+        let v=match self {
             CryptoError::IO(e) => e.raw_os_error(),
             CryptoError::OsError(e) => e.raw_os_error(),
             CryptoError::UnixError(e) => Some(*e),
             _ => None
+        };
+        if let Some(libc::ENOSPC)=v{
+            panic!()
         }
+        v
     }
 }
 
