@@ -14,10 +14,10 @@ pub struct SeekableWriter<'b, T: Read + Write + Seek> {
 
 const HOLE_BLOCKS_PER_ITER: usize = 2;
 
-impl<'a, 'b, T: Read + Write + Seek> SeekableWriter<'b, T> {
+impl<'b, T: Read + Write + Seek> SeekableWriter<'b, T> {
     pub fn write(&mut self, start_pos: usize, data: &[u8]) -> Result<()> {
         debug!("Writing {} bytes from offset {}", data.len(), start_pos);
-        if data.len() == 0 { return Ok(()); }
+        if data.is_empty() { return Ok(()); }
         let mut total_size = encrypted_file_size_from_seekable(&mut self.writer)? as usize;
         let end_pos = start_pos + data.len() - 1;
         while total_size < start_pos {
@@ -37,13 +37,13 @@ impl<'a, 'b, T: Read + Write + Seek> SeekableWriter<'b, T> {
             header: self.header,
             content_key: self.content_key,
         };
-        let mut before = if start_pos % CLEAR_FILE_CHUNK_SIZE == 0 && data.len() >= CLEAR_FILE_CHUNK_SIZE { vec![] } else {
+        let mut before = if start_pos.is_multiple_of(CLEAR_FILE_CHUNK_SIZE) && data.len() >= CLEAR_FILE_CHUNK_SIZE { vec![] } else {
             reader.read(write_start_pos, pos_within_start_chunk)?
         };
         before.extend(repeat_n(0u8, pos_within_start_chunk.saturating_sub(before.len())));
         let after = if
         end_pos > total_size ||
-            ((data.len() + start_pos) % CLEAR_FILE_CHUNK_SIZE == 0 && data.len() >= CLEAR_FILE_CHUNK_SIZE) { vec![] } else {
+            ((data.len() + start_pos).is_multiple_of(CLEAR_FILE_CHUNK_SIZE) && data.len() >= CLEAR_FILE_CHUNK_SIZE) { vec![] } else {
             reader.read(end_pos + 1, CLEAR_FILE_CHUNK_SIZE - pos_within_end_chunk - 1)?
         };
         let mut write_buffer = Vec::with_capacity(before.len() + data.len() + after.len());
@@ -54,9 +54,9 @@ impl<'a, 'b, T: Read + Write + Seek> SeekableWriter<'b, T> {
         self.writer.seek(SeekFrom::Start(block_start_off as u64))?;
         for (idx, chunk) in write_buffer.chunks(CLEAR_FILE_CHUNK_SIZE).enumerate() {
             let c = crate::cryptomator::encrypt_chunk(chunk, (block_start + idx) as u64, &self.header.nonce, &self.content_key)?;
-            self.writer.write(&c.nonce)?;
-            self.writer.write(&c.encrypted_payload)?;
-            self.writer.write(&c.tag)?;
+            self.writer.write_all(&c.nonce)?;
+            self.writer.write_all(&c.encrypted_payload)?;
+            self.writer.write_all(&c.tag)?;
         }
         self.writer.flush()?;
         debug!("Written {} bytes from offset {}", data.len(), start_pos);

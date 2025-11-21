@@ -15,7 +15,7 @@ impl MyType {
     }
 }
 
-fn main() ->Result<()>{
+fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_span_events(FmtSpan::ENTER)
         .with_env_filter("info")  // or "debug", or "mycrate=trace"
@@ -82,15 +82,15 @@ fn main() ->Result<()>{
 
 
     let fuse = cryptomator_fuse_rs::CryptoFuse::new(mator);
-        cryptomator_fuse_rs::mount2(
-            fuse,
-            PathBuf::from("/home/dar9586/Programmazione/Progetti/Rust/cryptomator-cli-rs/mount"),
-            &[
-                cryptomator_fuse_rs::MountOption::RW,
-                cryptomator_fuse_rs::MountOption::AutoUnmount,
-                cryptomator_fuse_rs::MountOption::AllowRoot,
-            ],
-        )?;
+    cryptomator_fuse_rs::mount2(
+        fuse,
+        PathBuf::from("/home/dar9586/Programmazione/Progetti/Rust/cryptomator-cli-rs/mount"),
+        &[
+            cryptomator_fuse_rs::MountOption::RW,
+            cryptomator_fuse_rs::MountOption::AutoUnmount,
+            cryptomator_fuse_rs::MountOption::AllowRoot,
+        ],
+    )?;
 
 
     Ok(())

@@ -48,12 +48,12 @@ pub(crate) fn split_array<T: Copy>(v: &[T], v1: &mut [T], v2: &mut [T]) {
 
 pub(crate) fn sha1(data: &[u8]) -> Output<Sha1> {
     let mut hasher = Sha1::new();
-    hasher.update(&data);
+    hasher.update(data);
     hasher.finalize()
 }
 
 pub(crate) fn base32_enc(data: &[u8]) -> String {
-    base32::encode(Alphabet::Rfc4648 { padding: true }, &data)
+    base32::encode(Alphabet::Rfc4648 { padding: true }, data)
 }
 
 pub(crate) fn base64_enc(data: &[u8]) -> String {
@@ -61,5 +61,5 @@ pub(crate) fn base64_enc(data: &[u8]) -> String {
 }
 
 pub(crate) fn base64_dec(data: &str) -> errors::Result<Vec<u8>> {
-    Ok(base64::prelude::BASE64_URL_SAFE.decode(data).map_err(|_| CryptoError::CorruptedFilename)?)
+    base64::prelude::BASE64_URL_SAFE.decode(data).map_err(|_| CryptoError::CorruptedFilename)
 }

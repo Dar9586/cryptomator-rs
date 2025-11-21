@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_arguments)]
 use cryptomator_crypto::{CryptoEntry, CryptoEntryType, CryptoError, Cryptomator, DirId, Seekable};
 use fuser::{FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyLseek, ReplyOpen, ReplyWrite, ReplyXattr, Request, TimeOrNow};
 use libc::{c_int, EBADF, EIO, ENOENT, O_CREAT, O_EXCL};
@@ -16,8 +17,8 @@ use tracing::info;
 use tracing::Level;
 use tracing_attributes::instrument;
 
-const UID: Lazy<u32> = Lazy::new(|| getuid());
-const GID: Lazy<u32> = Lazy::new(|| getgid());
+static UID: Lazy<u32> = Lazy::new(getuid);
+static GID: Lazy<u32> = Lazy::new(getgid);
 
 const BLOCK_SIZE: u32 = 512;
 const DIRECTORY_BLOCK_COUNT: u64 = 8;
@@ -28,7 +29,7 @@ struct FileHandle {
     flags: i32,
     seekable: Seekable<File>,
     offset: i64,
-    fuse_open_options: FuseOpenOptions
+    fuse_open_options: FuseOpenOptions,
 }
 
 pub struct CryptoFuse {
@@ -39,7 +40,6 @@ pub struct CryptoFuse {
 }
 
 impl CryptoFuse {
-
     fn next_handle(&mut self) -> u64 {
         self.handle_counter += 1;
         self.handle_counter
@@ -85,7 +85,7 @@ impl<T> IntoErrorErrno<T> for Result<T, CryptoError> {
 
 impl<T> IntoErrorErrno<T> for Option<T> {
     fn to_errno(self) -> FuseResult<T> {
-        self.ok_or(libc::EIO)
+        self.ok_or(EIO)
     }
 }
 
@@ -189,13 +189,13 @@ fn file_to_file_attr(path: &CryptoEntryType) -> FuseResult<FileAttr> {
 
 fn entry_to_file_attr(entry: &CryptoEntryType) -> FuseResult<FileAttr> {
     match entry {
-        CryptoEntryType::Symlink { .. } => { sym_to_file_attr(entry) },
-        CryptoEntryType::Directory { .. } => { dir_to_file_attr(entry) },
-        CryptoEntryType::File { .. } => { file_to_file_attr(entry) },
+        CryptoEntryType::Symlink { .. } => { sym_to_file_attr(entry) }
+        CryptoEntryType::Directory { .. } => { dir_to_file_attr(entry) }
+        CryptoEntryType::File { .. } => { file_to_file_attr(entry) }
     }
 }
 #[instrument(skip(fuse), level=Level::INFO,ret,err)]
-fn getattr(fuse: &mut CryptoFuse, ino: u64, fh: Option<u64>) -> Result<FileAttr, c_int> {
+fn getattr(fuse: &mut CryptoFuse, ino: u64, _fh: Option<u64>) -> Result<FileAttr, c_int> {
     if let Some(x) = fuse.cache.get(&ino) {
         let attr = entry_to_file_attr(x)?;
         Ok(attr)
@@ -216,14 +216,14 @@ fn lookup(fuse: &mut CryptoFuse, parent: u64, name: &OsStr) -> Result<FileAttr, 
     let parent = DirId::from_str(dir_id, &fuse.crypto).to_errno()?;
     let name = name.to_str().unwrap();
     let child = parent.lookup(name).to_errno()?;
-    let child = child.ok_or_else(|| ENOENT)?;
+    let child = child.ok_or(ENOENT)?;
     let attr = entry_to_file_attr(&child.entry_type)?;
     fuse.insert_in_cache(attr.ino, child.entry_type);
     Ok(attr)
 }
 
 #[instrument(skip(fuse), level=Level::INFO,ret,err)]
-fn readdir(fuse: &mut CryptoFuse, ino: u64, fh: u64, offset: i64) -> Result<Vec<(u64, i64, FileType, String)>, c_int> {
+fn readdir(fuse: &mut CryptoFuse, ino: u64, _fh: u64, offset: i64) -> Result<Vec<(u64, i64, FileType, String)>, c_int> {
     let x = fuse.cache.get(&ino).to_errno()?;
     let dir_id = x.directory();
     let parent = DirId::from_str(dir_id, &fuse.crypto).to_errno()?;
@@ -248,8 +248,8 @@ fn readlink(fuse: &mut CryptoFuse, ino: u64) -> Result<Vec<u8>, c_int> {
 }
 
 #[instrument(skip(fuse), level=Level::INFO,ret,err)]
-fn read(fuse: &mut CryptoFuse, _ino: u64, fh: u64, offset: i64, size: u32, _flags: i32, _lock_owner: Option<u64>) -> Result<Vec<u8>, c_int> {
-    let FileHandle { ino, flags, seekable, offset, fuse_open_options } = fuse.handles.get_mut(&fh).ok_or_else(|| EBADF)?;
+fn read(fuse: &mut CryptoFuse, _ino: u64, fh: u64, _offset: i64, size: u32, _flags: i32, _lock_owner: Option<u64>) -> Result<Vec<u8>, c_int> {
+    let FileHandle { ino, flags, seekable, offset, fuse_open_options } = fuse.handles.get_mut(&fh).ok_or(EBADF)?;
     assert_eq!(*ino, _ino);
     assert_eq!(*flags, _flags);
     if !fuse_open_options.read { return Err(EBADF); }
@@ -267,7 +267,7 @@ struct FuseOpenOptions {
     truncate: bool,
 }
 impl FuseOpenOptions {
-    fn to_file_options(&self) -> OpenOptions {
+    fn to_file_options(self) -> OpenOptions {
         let mut options = File::options();
         if self.write { options.write(true); }
         if self.read || self.write { options.read(true); }
@@ -282,22 +282,22 @@ impl FuseOpenOptions {
         if flags & libc::O_APPEND != 0 {
             options.append = true;
         }
-        if flags & libc::O_CREAT != 0 {
+        if flags & O_CREAT != 0 {
             options.create = true;
-            if flags & libc::O_EXCL != 0 {
+            if flags & O_EXCL != 0 {
                 options.create_new = true;
             }
         }
         if flags & libc::O_TRUNC != 0 {
             options.truncate = true;
         }
-        if flags & 0x3 == libc::O_WRONLY {
+        if flags & libc::O_ACCMODE == libc::O_WRONLY {
             options.write = true;
         }
-        if flags & 0x3 == libc::O_RDONLY {
+        if flags & libc::O_ACCMODE == libc::O_RDONLY {
             options.read = true;
         }
-        if flags & 0x3 == libc::O_RDWR {
+        if flags & libc::O_ACCMODE == libc::O_RDWR {
             options.write = true;
             options.read = true;
         }
@@ -337,8 +337,8 @@ fn open(fuse: &mut CryptoFuse, ino: u64, flags: i32) -> Result<u64, c_int> {
 }
 
 #[instrument(skip(fuse,data), level=Level::INFO,ret,err)]
-fn write(fuse: &mut CryptoFuse, _ino: u64, fh: u64, offset: i64, data: &[u8], _write_flags: u32, _flags: i32, _lock_owner: Option<u64>) -> Result<u32, c_int> {
-    let FileHandle { seekable, offset, fuse_open_options, .. } = fuse.handles.get_mut(&fh).ok_or_else(|| EBADF)?;
+fn write(fuse: &mut CryptoFuse, _ino: u64, fh: u64, _offset: i64, data: &[u8], _write_flags: u32, _flags: i32, _lock_owner: Option<u64>) -> Result<u32, c_int> {
+    let FileHandle { seekable, offset, fuse_open_options, .. } = fuse.handles.get_mut(&fh).ok_or(EBADF)?;
     if !fuse_open_options.write { return Err(EBADF); }
     let mut writer = fuse.crypto.file_writer(seekable).to_errno()?;
     writer.write(*offset as usize, data).to_errno()?;
@@ -346,7 +346,7 @@ fn write(fuse: &mut CryptoFuse, _ino: u64, fh: u64, offset: i64, data: &[u8], _w
 }
 
 #[instrument(skip(fuse), level=Level::INFO,ret,err)]
-fn create(fuse: &mut CryptoFuse, parent: u64, name: &OsStr, mode: u32, umask: u32, flags: i32, open_file: bool) -> Result<(FileAttr, u64), c_int> {
+fn create(fuse: &mut CryptoFuse, parent: u64, name: &OsStr, _mode: u32, _umask: u32, flags: i32, open_file: bool) -> Result<(FileAttr, u64), c_int> {
     let flags = flags & (!(O_CREAT | O_EXCL));
     let parent = fuse.cache.get(&parent).to_errno()?.directory();
     let name = name.to_str().to_errno()?;
@@ -358,13 +358,13 @@ fn create(fuse: &mut CryptoFuse, parent: u64, name: &OsStr, mode: u32, umask: u3
 }
 
 #[instrument(skip(fuse), level=Level::INFO,ret,err)]
-fn setattr(fuse: &mut CryptoFuse, ino: u64, mode: Option<u32>, uid: Option<u32>, gid: Option<u32>, size: Option<u64>, _atime: Option<TimeOrNow>, _mtime: Option<TimeOrNow>, _ctime: Option<SystemTime>, fh: Option<u64>, _crtime: Option<SystemTime>, _chgtime: Option<SystemTime>, _bkuptime: Option<SystemTime>, flags: Option<u32>) -> Result<FileAttr, c_int> {
+fn setattr(fuse: &mut CryptoFuse, ino: u64, _mode: Option<u32>, _uid: Option<u32>, _gid: Option<u32>, _size: Option<u64>, _atime: Option<TimeOrNow>, _mtime: Option<TimeOrNow>, _ctime: Option<SystemTime>, _fh: Option<u64>, _crtime: Option<SystemTime>, _chgtime: Option<SystemTime>, _bkuptime: Option<SystemTime>, _flags: Option<u32>) -> Result<FileAttr, c_int> {
     let k = fuse.cache.get(&ino).to_errno()?;
     entry_to_file_attr(k)
 }
 
 #[instrument(skip(fuse), level=Level::INFO,ret,err)]
-fn mkdir(fuse: &mut CryptoFuse, parent: u64, name: &OsStr, mode: u32, umask: u32) -> Result<FileAttr, c_int> {
+fn mkdir(fuse: &mut CryptoFuse, parent: u64, name: &OsStr, _mode: u32, _umask: u32) -> Result<FileAttr, c_int> {
     let parent = fuse.cache.get(&parent).to_errno()?.directory();
     let name = name.to_str().to_errno()?;
     let dir_id = DirId::from_str(parent, &fuse.crypto).to_errno()?;
@@ -385,7 +385,7 @@ fn symlink(fuse: &mut CryptoFuse, parent: u64, link_name: &OsStr, target: &Path)
 }
 
 #[instrument(skip(fuse), level=Level::INFO,ret,err)]
-fn mknod(fuse: &mut CryptoFuse, parent: u64, name: &OsStr, mode: u32, umask: u32, rdev: u32) -> Result<FileAttr, c_int> {
+fn mknod(fuse: &mut CryptoFuse, parent: u64, name: &OsStr, mode: u32, umask: u32, _rdev: u32) -> Result<FileAttr, c_int> {
     if mode & libc::S_IFREG != libc::S_IFREG {
         return Err(libc::ENOTSUP);
     }
@@ -398,7 +398,7 @@ fn unlink(fuse: &mut CryptoFuse, parent: u64, name: &OsStr) -> Result<(), c_int>
     let dir_id = DirId::from_str(parent, &fuse.crypto).to_errno()?;
     let name = name.to_str().to_errno()?;
     let v = fuse.crypto.delete_entry(&dir_id, name).to_errno()?;
-    v.ok_or_else(|| libc::ENOENT)
+    v.ok_or(ENOENT)
 }
 
 #[instrument(skip(fuse), level=Level::INFO,ret,err)]
@@ -418,8 +418,8 @@ fn rename(fuse: &mut CryptoFuse, parent: u64, name: &OsStr, newparent: u64, newn
 
 
 #[instrument(skip(fuse), level=Level::INFO,ret,err)]
-fn lseek(fuse: &mut CryptoFuse, ino: u64, fh: u64, offset: i64, whence: i32) -> Result<i64, c_int> {
-    let FileHandle { seekable, offset: fd_offset, .. } = fuse.handles.get_mut(&fh).ok_or_else(|| EBADF)?;
+fn lseek(fuse: &mut CryptoFuse, _ino: u64, fh: u64, offset: i64, whence: i32) -> Result<i64, c_int> {
+    let FileHandle { seekable, offset: fd_offset, .. } = fuse.handles.get_mut(&fh).ok_or(EBADF)?;
     let new_offset = match whence {
         libc::SEEK_SET => 0,
         libc::SEEK_END => cryptomator_crypto::encrypted_file_size_from_seekable(seekable).to_errno()? as i64,
@@ -589,10 +589,10 @@ impl Filesystem for CryptoFuse {
         match res {
             Ok(x) => {
                 for (ino, offset, kind, name) in x {
-                    if reply.add(ino, offset, kind, name) { break }
+                    if reply.add(ino, offset, kind, name) { break; }
                 }
                 reply.ok();
-            },
+            }
             Err(e) => reply.error(e),
         }
     }
@@ -616,9 +616,9 @@ impl Filesystem for CryptoFuse {
     fn listxattr(&mut self, _req: &Request<'_>, ino: u64, size: u32, reply: ReplyXattr) {
         // xattr not supported in cryptomator
         // info!"listxattr(ino: {ino:#x?}, size: {size})");
-        if size==0{
+        if size == 0 {
             reply.size(0)
-        }else {
+        } else {
             reply.data(&[]);
         }
     }
