@@ -272,7 +272,7 @@ impl Cryptomator {
     pub fn filename_encrypt(&self, name: &str, parent: &DirId, force_enc: bool) -> Result<EncryptedFilename> {
         let siv = self.aes_siv_enc(name.nfc().to_string().as_bytes(), Some(parent))?;
         let name = base64_enc(&siv);
-        Ok(if !force_enc && name.len() + EXTENSION_LENGTH > self.metadata.shortening_threshold as usize {
+        Ok(if !force_enc && name.len() + EXTENSION_SIZE > self.metadata.shortening_threshold as usize {
             let xx = format!("{}.c9r", name);
             let n = sha1(xx.as_bytes());
             EncryptedFilename::Compressed(base64_enc(&n))
@@ -304,7 +304,7 @@ impl Cryptomator {
         fs::create_dir_all(&dir_path)?;
 
         // write dir.c9r pointing to child in the parent folder
-        let parent_dir_id_file = parent_path_entry.join("dir.c9r");
+        let parent_dir_id_file = parent_path_entry.join(STDFILE_DIR);
         fs::write(&parent_dir_id_file, data)?;
 
         // write dirid.c9r pointing to parent in the child folder
@@ -321,7 +321,7 @@ impl Cryptomator {
     }
 
     fn write_dirid_file(&self, parent: &DirId, child: &DirId) -> Result<()> {
-        let child_dir_id_file = child.path().join("dirid.c9r");
+        let child_dir_id_file = child.path().join(STDFILE_DIRID);
         let mut f = Seekable::from_path(&child_dir_id_file,true)?;
         self.write_header(&mut f)?;
         let mut writer = self.file_writer(&mut f)?;
@@ -337,7 +337,7 @@ impl Cryptomator {
             self.write_uncompressed_name(parent, name, enc_name.get_compressed())?;
         }
         // write symlink.c9r with the target
-        let parent_dir_id_file = parent_path_entry.join("symlink.c9r");
+        let parent_dir_id_file = parent_path_entry.join(STDFILE_SYMLINK);
         let mut f = Seekable::from_path(&parent_dir_id_file,true)?;
         self.write_header(&mut f)?;
         let mut writer = self.file_writer(&mut f)?;
@@ -444,7 +444,7 @@ impl Cryptomator {
     fn write_uncompressed_name(&self, dir_id: &DirId, name: &str, compressed_name: &str) -> Result<()> {
         let encrypted = self.filename_encrypt(name, dir_id, true)?;
         let dir_path = dir_id.path().join(compressed_name);
-        let file_name_path = dir_path.join("name.c9s");
+        let file_name_path = dir_path.join(STDFILE_NAME);
         fs::create_dir_all(&dir_path)?;
         fs::write(&file_name_path, encrypted.to_path_name())?;
         Ok(())
@@ -463,7 +463,7 @@ impl Cryptomator {
         let mut path = dir_id.path().join(&enc_name);
         if v.is_compressed() {
             self.write_uncompressed_name(dir_id, name, &enc_name)?;
-            path = path.join("contents.c9r");
+            path = path.join(STDFILE_CONTENTS);
         }
         let mut f = BufWriter::new(fs::File::create(&path)?);
         self.write_header(&mut f)?;
@@ -553,8 +553,6 @@ pub struct CryptoEntry {
     pub name: String,
     pub entry_type: CryptoEntryType,
 }
-pub(crate) const EXTENSION_LENGTH: usize = ".c9s".len();
-
 
 impl From<&[u8]> for EncryptedFileChunk {
     fn from(value: &[u8]) -> Self {

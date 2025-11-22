@@ -30,6 +30,16 @@ pub(crate) type CryptoAes256Key = [u8; AES256KEY_BYTES];
 pub(crate) const ENCRYPTED_CONTENT_KEY: usize = UNUSED_SIZE + AES256KEY_BYTES;
 pub(crate) type DirIdData = Vec<u8>;
 
+pub(crate) const COMPRESSED_EXTENSION:&str=".c9s";
+pub(crate) const ENCRYPTED_EXTENSION:&str=".c9r";
+pub(crate) const EXTENSION_SIZE:usize=ENCRYPTED_EXTENSION.len();
+pub(crate) const STDFILE_DIRID:&str="dirid.c9r";
+pub(crate) const STDFILE_SYMLINK:&str="symlink.c9r";
+pub(crate) const STDFILE_NAME:&str="name.c9s";
+pub(crate) const STDFILE_DIR:&str="dir.c9r";
+pub(crate) const STDFILE_CONTENTS:&str="contents.c9r";
+
+
 pub(crate) fn concat_vec<T: Clone>(v1: &[T], v2: &[T]) -> Vec<T> {
     let mut res = Vec::with_capacity(v1.len() + v2.len());
     res.extend_from_slice(v1);
