@@ -15,8 +15,8 @@ impl MyType {
     }
 }
 
+use clap::{ArgGroup, Parser};
 use std::fs;
-use clap::{Parser, ArgGroup};
 
 /// Demo CLI that accepts a directory path and one password source.
 #[derive(Debug, Parser)]
@@ -51,7 +51,7 @@ struct Cli {
     read_write: bool,
 }
 
-fn main() -> Result<()> {
+fn main2() -> Result<()> {
     let cli = Cli::parse();
 
     let password = get_password(&cli)?;
@@ -94,7 +94,7 @@ fn get_password(cli: &Cli) -> Result<String> {
 }
 
 
-fn main2() -> Result<()> {
+fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_span_events(FmtSpan::ENTER)
         .with_env_filter("info")  // or "debug", or "mycrate=trace"

@@ -14,7 +14,8 @@ use aes_siv::aead::Payload;
 use cmac::digest::consts::U64;
 use hmac::digest::core_api::CoreWrapper;
 use hmac::{Hmac, Mac};
-use jwt::{Header, Token, VerifyWithKey};
+use jwt::header::HeaderType;
+use jwt::{AlgorithmType, Header, SignWithKey, Token, VerifyWithKey};
 use rand::rngs::OsRng;
 use rand::TryRngCore;
 use scrypt::Params;
@@ -184,6 +185,88 @@ pub fn encrypt_chunk(data: &[u8], offset: u64, header_nonce: &CryptoNonce, conte
         tag,
     })
 }
+const SCRYPT_SALT_SIZE: usize = 8;
+const SCRYPT_BLOCK_SIZE: u32 = 8;
+const SCRYPT_COST_LOG: u8 = 15;
+const MASTERKEY_VERSION: u32 = 999;
+pub fn create_vault(vault_root: &Path, password: &str) -> Result<()> {
+    fs::create_dir_all(vault_root)?;
+    //let kek_param = Params::new(masterkey.scrypt_cost_param.ilog2() as u8, masterkey.scrypt_block_size, SCRYPT_PARALLELISM, SCRYPT_KEY_LENGTH).map_err(|_| CryptoError::InvalidParameters)?;
+    let mut kek_key = uninit::<[u8; KEK_KEY_LENGTH]>();
+    let mut encryption_master = uninit::<[u8; ENC_KEY_LENGTH]>();
+    let mut mac_master = uninit::<[u8; MAC_KEY_LENGTH]>();
+    let mut scrypt_salt = uninit::<[u8; SCRYPT_SALT_SIZE]>();
+    let mut wrapped_encryption_master = uninit::<[u8; ENC_KEY_LENGTH + SCRYPT_SALT_SIZE]>();
+    let mut wrapped_mac_master = uninit::<[u8; MAC_KEY_LENGTH + SCRYPT_SALT_SIZE]>();
+    OsRng.try_fill_bytes(&mut encryption_master)?;
+    OsRng.try_fill_bytes(&mut mac_master)?;
+    OsRng.try_fill_bytes(&mut scrypt_salt)?;
+    let params = Params::new(SCRYPT_COST_LOG, SCRYPT_BLOCK_SIZE, SCRYPT_PARALLELISM, SCRYPT_KEY_LENGTH).map_err(|_| CryptoError::InvalidParameters)?;
+    scrypt::scrypt(password.as_bytes(), &scrypt_salt, &params, &mut kek_key).map_err(|_| CryptoError::InvalidParameters)?;
+    let kek = Kek::from(kek_key);
+    kek.wrap(&encryption_master, &mut wrapped_encryption_master).map_err(|_| CryptoError::InvalidParameters)?;
+    kek.wrap(&mac_master, &mut wrapped_mac_master).map_err(|_| CryptoError::InvalidParameters)?;
+    let mut mac: Hmac<Sha256> = <CoreWrapper<_> as Mac>::new_from_slice(&mac_master)?;
+    mac.update(&MASTERKEY_VERSION.to_be_bytes());
+    let result = mac.finalize();
+    let master = SerdeMasterKey {
+        version: 999,
+        scrypt_salt: scrypt_salt.to_vec(),
+        scrypt_cost_param: 2u64.pow(SCRYPT_COST_LOG as u32),
+        scrypt_block_size: SCRYPT_BLOCK_SIZE,
+        primary_master_key: wrapped_encryption_master.to_vec(),
+        hmac_master_key: wrapped_mac_master.to_vec(),
+        version_mac: result.into_bytes().to_vec(),
+    };
+
+    let vault_payload = VaultMetadata {
+        jti: Uuid::new_v4().to_string(),
+        format: 8,
+        cipher_combo: "SIV_GCM".to_string(),
+        shortening_threshold: 220,
+    };
+    let header = Header {
+        algorithm: AlgorithmType::Hs256,
+        key_id: Some("masterkeyfile:masterkey.cryptomator".to_string()),
+        type_: Some(HeaderType::JsonWebToken),
+        content_type: None,
+    };
+    let supreme_key = concat_vec(&encryption_master, &mac_master);
+    let key: Hmac<Sha256> = <CoreWrapper<_> as Mac>::new_from_slice(&supreme_key)?;
+    let token = Token::new(header, &vault_payload).sign_with_key(&key).map_err(|_| CryptoError::InvalidParameters)?;
+
+    let masterkey_path = vault_root.join("masterkey.cryptomator");
+    let masterkey_path_bak = vault_root.join("masterkey.cryptomator.bak");
+    fs::write(&masterkey_path, serde_json::to_vec(&master)?)?;
+    let vault_path = vault_root.join("vault.cryptomator");
+    let vault_path_bak = vault_root.join("vault.cryptomator.bak");
+    fs::write(&vault_path, token.as_str())?;
+    fs::copy(vault_path, vault_path_bak)?;
+    fs::copy(masterkey_path, masterkey_path_bak)?;
+
+    let mut siv_key = uninit::<[u8; MAC_KEY_LENGTH + ENC_KEY_LENGTH]>();
+    fill_array(&mut siv_key, &mac_master, &encryption_master);
+
+
+    let mator = Cryptomator {
+        encryption_master,
+        siv_key: GenericArray::from(siv_key),
+        metadata: vault_payload,
+        vault_root: vault_root.to_path_buf(),
+    };
+    let id = DirId::from_str(b"", &mator)?;
+    fs::create_dir_all(id.path())?;
+
+
+    let child_dir_id_file = id.path().join(STDFILE_DIRID);
+    let mut f = Seekable::from_path(&child_dir_id_file, true)?;
+    mator.write_header(&mut f)?;
+    let mut writer = mator.file_writer(&mut f)?;
+    writer.write(0, &id.unencrypted)?;
+
+    Ok(())
+}
+
 impl CryptomatorOpen {
     pub fn open(&self) -> Result<Cryptomator> {
         let masterkey_path = self.vault_path.join("masterkey.cryptomator");
@@ -204,7 +287,10 @@ impl CryptomatorOpen {
         kek.unwrap(&masterkey.hmac_master_key, &mut mac_master).unwrap();
         let supreme_key = concat_vec(&encryption_master, &mac_master);
         let key: Hmac<Sha256> = <CoreWrapper<_> as Mac>::new_from_slice(&supreme_key)?;
+        let mut mac_key: Hmac<Sha256> = <CoreWrapper<_> as Mac>::new_from_slice(&mac_master)?;
         let token: Token<Header, VaultMetadata, _> = vault_content.verify_with_key(&key).map_err(|_| CryptoError::InvalidParameters)?;
+        mac_key.update(&masterkey.version.to_be_bytes());
+        mac_key.verify_slice(&masterkey.version_mac).map_err(|_| CryptoError::InvalidParameters)?;
         let mut siv_key = uninit::<[u8; MAC_KEY_LENGTH + ENC_KEY_LENGTH]>();
         fill_array(&mut siv_key, &mac_master, &encryption_master);
         Ok(Cryptomator {
@@ -292,27 +378,27 @@ impl Cryptomator {
         DirId::from_str(&[], self)
     }
 
-    pub fn create_directory_with_dir_id(&self, parent: &DirId, name: &str, data: &[u8]) -> Result<CryptoEntry> {
+    pub fn create_directory_with_dir_id(&self, parent: &DirId, name: &str, dir_id: &[u8]) -> Result<CryptoEntry> {
         let enc_name = self.filename_encrypt(name, parent, false)?;
         let parent_path_entry = parent.path().join(enc_name.to_path_name());
         fs::create_dir_all(&parent_path_entry)?;
         if enc_name.is_compressed() {
             self.write_uncompressed_name(parent, name, enc_name.get_compressed())?;
         }
-        let child = DirId::from_str(data, self)?;
+        let child = DirId::from_str(dir_id, self)?;
         let dir_path = child.path();
         fs::create_dir_all(&dir_path)?;
 
         // write dir.c9r pointing to child in the parent folder
         let parent_dir_id_file = parent_path_entry.join(STDFILE_DIR);
-        fs::write(&parent_dir_id_file, data)?;
+        fs::write(&parent_dir_id_file, dir_id)?;
 
         // write dirid.c9r pointing to parent in the child folder
         self.write_dirid_file(parent, &child)?;
 
         Ok(CryptoEntry {
             name: name.to_string(),
-            entry_type: CryptoEntryType::Directory { dir_id: data.to_vec() },
+            entry_type: CryptoEntryType::Directory { dir_id: dir_id.to_vec() },
         })
     }
 
@@ -592,3 +678,15 @@ pub fn read_file_header<T: Read>(reader: &mut T) -> Result<FileHeader> {
 }
 
 
+#[test]
+fn create_and_open_vault() -> Result<()> {
+    let password = "testtest";
+    let dir = tempdir::TempDir::new("vault")?;
+    let dir_path = dir.path();
+    create_vault(dir_path, password)?;
+    CryptomatorOpen {
+        vault_path: PathBuf::from(dir_path),
+        password: password.to_string(),
+    }.open()?;
+    Ok(())
+}
