@@ -15,7 +15,86 @@ impl MyType {
     }
 }
 
+use std::fs;
+use clap::{Parser, ArgGroup};
+
+/// Demo CLI that accepts a directory path and one password source.
+#[derive(Debug, Parser)]
+#[command(author, version, about)]
+#[command(group(
+    ArgGroup::new("password_source")
+        .args(["password", "password_file", "password_stdin"])
+        .multiple(false) // only one source allowed
+        .required(true)
+))]
+struct Cli {
+    /// Directory to operate on
+    #[arg(short, long)]
+    vault_root: PathBuf,
+
+    #[arg(short, long)]
+    mount_point: PathBuf,
+
+    /// Provide password directly
+    #[arg(long)]
+    password: Option<String>,
+
+    /// Read password from file
+    #[arg(long)]
+    password_file: Option<PathBuf>,
+
+    /// Read password from STDIN
+    #[arg(long)]
+    password_stdin: bool,
+
+    #[arg(long)]
+    read_write: bool,
+}
+
 fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    let password = get_password(&cli)?;
+
+    let mator = cryptomator_crypto::CryptomatorOpen {
+        vault_path: cli.vault_root,
+        password,
+    }.open()?;
+
+    let fuse = cryptomator_fuse_rs::CryptoFuse::new(mator);
+    cryptomator_fuse_rs::mount2(
+        fuse,
+        cli.mount_point,
+        &[
+            if cli.read_write{cryptomator_fuse_rs::MountOption::RW}else{cryptomator_fuse_rs::MountOption::RO},
+            cryptomator_fuse_rs::MountOption::AutoUnmount,
+            cryptomator_fuse_rs::MountOption::AllowRoot,
+        ],
+    )?;
+
+    Ok(())
+}
+
+fn get_password(cli: &Cli) -> Result<String> {
+    if let Some(pwd) = &cli.password {
+        return Ok(pwd.clone());
+    }
+
+    if let Some(file) = &cli.password_file {
+        return Ok(fs::read_to_string(file)?.trim_end().to_owned());
+    }
+
+    if cli.password_stdin {
+        use std::io::{self, Read};
+        let mut buf = String::new();
+        io::stdin().read_to_string(&mut buf)?;
+        return Ok(rpassword::prompt_password("Enter password: ")?);
+    }
+    unreachable!()
+}
+
+
+fn main2() -> Result<()> {
     tracing_subscriber::fmt()
         .with_span_events(FmtSpan::ENTER)
         .with_env_filter("info")  // or "debug", or "mycrate=trace"

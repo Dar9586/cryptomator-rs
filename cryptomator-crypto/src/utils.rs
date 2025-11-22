@@ -1,3 +1,4 @@
+use std::mem::MaybeUninit;
 use crate::errors;
 use crate::errors::CryptoError;
 use aes_gcm::aes::cipher::crypto_common::Output;
@@ -36,11 +37,13 @@ pub(crate) fn concat_vec<T: Clone>(v1: &[T], v2: &[T]) -> Vec<T> {
     res
 }
 
+ #[inline]
 pub(crate) fn fill_array<T: Copy>(v: &mut [T], v1: &[T], v2: &[T]) {
     v[..v1.len()].copy_from_slice(v1);
     v[v1.len()..].copy_from_slice(v2);
 }
 
+#[inline]
 pub(crate) fn split_array<T: Copy>(v: &[T], v1: &mut [T], v2: &mut [T]) {
     v1.copy_from_slice(&v[..v1.len()]);
     v2.copy_from_slice(&v[v1.len()..]);
@@ -62,4 +65,10 @@ pub(crate) fn base64_enc(data: &[u8]) -> String {
 
 pub(crate) fn base64_dec(data: &str) -> errors::Result<Vec<u8>> {
     base64::prelude::BASE64_URL_SAFE.decode(data).map_err(|_| CryptoError::CorruptedFilename)
+}
+
+#[inline]
+#[allow(clippy::uninit_assumed_init)]
+pub fn uninit<T>()->T{
+    unsafe{MaybeUninit::uninit().assume_init()}
 }
