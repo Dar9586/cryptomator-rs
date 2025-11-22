@@ -3,3 +3,5 @@
 /cryptomator-crypto/target
 /cryptomator-fuse-rs/target
 /mount
+
+**/Cargo.lock

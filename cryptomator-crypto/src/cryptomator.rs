@@ -4,8 +4,8 @@ use crate::errors::CryptoError::UnixError;
 use crate::errors::Result;
 use crate::seekable_reader::SeekableReader;
 use crate::seekable_writer::SeekableWriter;
-use crate::utils::{CryptoAes256Key, CryptoNonce, CryptoTag, DirIdData, AES256KEY_BYTES, CLEAR_FILE_CHUNK_SIZE, ENCRYPTED_CONTENT_KEY, ENC_KEY_LENGTH, FILE_CHUNK_HEADERS_SIZE_U64, FILE_CHUNK_SIZE, FILE_HEADER_SIZE, KEK_KEY_LENGTH, MAC_KEY_LENGTH, NONCE_SIZE, SCRYPT_KEY_LENGTH, SCRYPT_PARALLELISM, TAG_SIZE, U64_BYTES, UNUSED_CONTENT, UNUSED_SIZE};
-use crate::{utils, Seekable};
+use crate::utils::*;
+use crate::Seekable;
 use aes_gcm::aes::Aes256;
 use aes_gcm::{aead::{Aead, KeyInit}, Nonce};
 use aes_kw::Kek;
@@ -147,8 +147,8 @@ struct VaultMetadata {
 
 pub fn decrypt_chunk(chunk: EncryptedFileChunk, content_key: &CryptoAes256Key, counter: u64, nonce: &CryptoNonce) -> Result<Vec<u8>> {
     let be_counter = counter.to_be_bytes();
-    let mut aad= utils::uninit::<[u8; U64_BYTES + NONCE_SIZE]>();
-    utils::fill_array(&mut aad, &be_counter, nonce);
+    let mut aad= uninit::<[u8; U64_BYTES + NONCE_SIZE]>();
+    fill_array(&mut aad, &be_counter, nonce);
     let v = aes_gcm::Aes256Gcm::new_from_slice(content_key)?;
     let mut msg_and_tag = Vec::new();
     msg_and_tag.extend_from_slice(&chunk.encrypted_payload);
@@ -163,10 +163,10 @@ pub fn decrypt_chunk(chunk: EncryptedFileChunk, content_key: &CryptoAes256Key, c
 
 pub fn encrypt_chunk(data: &[u8], offset: u64, header_nonce: &CryptoNonce, content_key: &CryptoAes256Key) -> Result<EncryptedFileChunk> {
     let be_offset = offset.to_be_bytes();
-    let mut tag = utils::uninit::<[u8; TAG_SIZE]>();
-    let mut chunk_nonce = utils::uninit::<[u8; NONCE_SIZE]>();
-    let mut aad = utils::uninit::<[u8; U64_BYTES + NONCE_SIZE]>();
-    utils::fill_array(&mut aad, &be_offset, header_nonce);
+    let mut tag = uninit::<[u8; TAG_SIZE]>();
+    let mut chunk_nonce = uninit::<[u8; NONCE_SIZE]>();
+    let mut aad = uninit::<[u8; U64_BYTES + NONCE_SIZE]>();
+    fill_array(&mut aad, &be_offset, header_nonce);
     OsRng.try_fill_bytes(&mut chunk_nonce)?;
 
     let v = aes_gcm::Aes256Gcm::new_from_slice(content_key)?;
@@ -195,18 +195,18 @@ impl CryptomatorOpen {
         // let (header,_)=vault_content.split_once(".").unwrap();
         // let header=Header::from_base64(header)?;
         let kek_param = Params::new(masterkey.scrypt_cost_param.ilog2() as u8, masterkey.scrypt_block_size, SCRYPT_PARALLELISM, SCRYPT_KEY_LENGTH).map_err(|_| CryptoError::InvalidParameters)?;
-        let mut kek_key = utils::uninit::<[u8; KEK_KEY_LENGTH]>();
-        let mut encryption_master = utils::uninit::<[u8; ENC_KEY_LENGTH]>();
-        let mut mac_master = utils::uninit::<[u8; MAC_KEY_LENGTH]>();
+        let mut kek_key = uninit::<[u8; KEK_KEY_LENGTH]>();
+        let mut encryption_master = uninit::<[u8; ENC_KEY_LENGTH]>();
+        let mut mac_master = uninit::<[u8; MAC_KEY_LENGTH]>();
         scrypt::scrypt(self.password.as_bytes(), &masterkey.scrypt_salt, &kek_param, &mut kek_key).map_err(|_| CryptoError::InvalidParameters)?;
         let kek = Kek::from(kek_key);
         kek.unwrap(&masterkey.primary_master_key, &mut encryption_master).unwrap();
         kek.unwrap(&masterkey.hmac_master_key, &mut mac_master).unwrap();
-        let supreme_key = utils::concat_vec(&encryption_master, &mac_master);
+        let supreme_key = concat_vec(&encryption_master, &mac_master);
         let key: Hmac<Sha256> = <CoreWrapper<_> as Mac>::new_from_slice(&supreme_key)?;
         let token: Token<Header, VaultMetadata, _> = vault_content.verify_with_key(&key).map_err(|_| CryptoError::InvalidParameters)?;
-        let mut siv_key = utils::uninit::<[u8; MAC_KEY_LENGTH + ENC_KEY_LENGTH]>();
-        utils::fill_array(&mut siv_key, &mac_master, &encryption_master);
+        let mut siv_key = uninit::<[u8; MAC_KEY_LENGTH + ENC_KEY_LENGTH]>();
+        fill_array(&mut siv_key, &mac_master, &encryption_master);
         Ok(Cryptomator {
             siv_key: GenericArray::from(siv_key),
             encryption_master,
@@ -271,18 +271,18 @@ impl Cryptomator {
 
     pub fn filename_encrypt(&self, name: &str, parent: &DirId, force_enc: bool) -> Result<EncryptedFilename> {
         let siv = self.aes_siv_enc(name.nfc().to_string().as_bytes(), Some(parent))?;
-        let name = utils::base64_enc(&siv);
+        let name = base64_enc(&siv);
         Ok(if !force_enc && name.len() + EXTENSION_LENGTH > self.metadata.shortening_threshold as usize {
             let xx = format!("{}.c9r", name);
-            let n = utils::sha1(xx.as_bytes());
-            EncryptedFilename::Compressed(utils::base64_enc(&n))
+            let n = sha1(xx.as_bytes());
+            EncryptedFilename::Compressed(base64_enc(&n))
         } else {
             EncryptedFilename::Encrypted(name)
         })
     }
 
     pub fn filename_decrypt(&self, name: &str, parent: &DirId) -> Result<String> {
-        let x = utils::base64_dec(name)?;
+        let x = base64_dec(name)?;
         let siv = self.aes_siv_dec(&x, Some(parent))?;
         let sss = String::from_utf8(siv).map_err(|_| CryptoError::CorruptedFilename)?;
         Ok(sss)
@@ -374,13 +374,13 @@ impl Cryptomator {
 
     fn decrypt_header(&self, header: &FileHeader) -> Result<([u8; UNUSED_SIZE], CryptoAes256Key)> {
         let v = aes_gcm::Aes256Gcm::new_from_slice(&self.encryption_master)?;
-        let mut payload = utils::uninit::<[u8; ENCRYPTED_CONTENT_KEY + TAG_SIZE]>();
-        utils::fill_array(&mut payload, &header.enc_content_key, &header.tag);
+        let mut payload = uninit::<[u8; ENCRYPTED_CONTENT_KEY + TAG_SIZE]>();
+        fill_array(&mut payload, &header.enc_content_key, &header.tag);
         let payload = Payload::from(payload.as_slice());
         let dec = v.decrypt(<&Nonce<_>>::from(&header.nonce), payload)?;
-        let mut unused = utils::uninit::<[u8; UNUSED_SIZE]>();
-        let mut content_key = utils::uninit::<[u8; AES256KEY_BYTES]>();
-        utils::split_array(&dec, &mut unused, &mut content_key);
+        let mut unused = uninit::<[u8; UNUSED_SIZE]>();
+        let mut content_key = uninit::<[u8; AES256KEY_BYTES]>();
+        split_array(&dec, &mut unused, &mut content_key);
         Ok((unused, content_key))
     }
 
@@ -403,17 +403,17 @@ impl Cryptomator {
     }
 
     pub fn create_file_header(&self) -> Result<(FileHeader, CryptoAes256Key)> {
-        let mut tag = utils::uninit::<[u8; TAG_SIZE]>();
-        let mut nonce = utils::uninit::<[u8; NONCE_SIZE]>();
-        let mut content_key = utils::uninit::<[u8; AES256KEY_BYTES]>();
-        let mut cleartext_payload = utils::uninit::<[u8; AES256KEY_BYTES + UNUSED_SIZE]>();
+        let mut tag = uninit::<[u8; TAG_SIZE]>();
+        let mut nonce = uninit::<[u8; NONCE_SIZE]>();
+        let mut content_key = uninit::<[u8; AES256KEY_BYTES]>();
+        let mut cleartext_payload = uninit::<[u8; AES256KEY_BYTES + UNUSED_SIZE]>();
         OsRng.try_fill_bytes(&mut nonce)?;
         OsRng.try_fill_bytes(&mut content_key)?;
-        utils::fill_array(&mut cleartext_payload, &UNUSED_CONTENT, &content_key);
+        fill_array(&mut cleartext_payload, &UNUSED_CONTENT, &content_key);
 
         let v = aes_gcm::Aes256Gcm::new_from_slice(&self.encryption_master)?;
         let dec = v.encrypt(<&Nonce<_>>::from(&nonce), cleartext_payload.as_slice())?;
-        utils::split_array(&dec, &mut cleartext_payload, &mut tag);
+        split_array(&dec, &mut cleartext_payload, &mut tag);
         Ok((FileHeader {
             nonce,
             enc_content_key: cleartext_payload,
@@ -559,8 +559,8 @@ pub(crate) const EXTENSION_LENGTH: usize = ".c9s".len();
 impl From<&[u8]> for EncryptedFileChunk {
     fn from(value: &[u8]) -> Self {
         assert!(value.len() >= NONCE_SIZE + TAG_SIZE);
-        let mut nonce = utils::uninit::<[u8; NONCE_SIZE]>();
-        let mut tag = utils::uninit::<[u8; TAG_SIZE]>();
+        let mut nonce = uninit::<[u8; NONCE_SIZE]>();
+        let mut tag = uninit::<[u8; TAG_SIZE]>();
         nonce.copy_from_slice(&value[..NONCE_SIZE]);
         tag.copy_from_slice(&value[value.len() - TAG_SIZE..]);
         let encrypted_payload = value[NONCE_SIZE..value.len() - TAG_SIZE].to_vec();
@@ -570,7 +570,7 @@ impl From<&[u8]> for EncryptedFileChunk {
 }
 
 fn read_chunk<T: Read>(reader: &mut T) -> Result<Option<EncryptedFileChunk>> {
-    let mut chunk = utils::uninit::<[u8; FILE_CHUNK_SIZE]>();
+    let mut chunk = uninit::<[u8; FILE_CHUNK_SIZE]>();
     let mut reached = 0;
     loop {
         let r = reader.read(&mut chunk[reached..])?;
@@ -586,7 +586,7 @@ fn read_chunk<T: Read>(reader: &mut T) -> Result<Option<EncryptedFileChunk>> {
 }
 
 pub fn read_file_header<T: Read>(reader: &mut T) -> Result<FileHeader> {
-    let mut header = utils::uninit::<FileHeader>();
+    let mut header = uninit::<FileHeader>();
     reader.read_exact(&mut header.nonce)?;
     reader.read_exact(&mut header.enc_content_key)?;
     reader.read_exact(&mut header.tag)?;

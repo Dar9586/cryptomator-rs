@@ -22,7 +22,6 @@ serde_json = "1.0"
 serde_with = { version = "3.16", features = ["base64"] }
 rand = "0.9"
 itertools = "0.14"
-bufstream = "0.1.4"
 log = "0.4.28"
 uuid = { version = "1.18.1", features = ["v4"] }
 libc = "0.2.177"
