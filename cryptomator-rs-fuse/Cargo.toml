@@ -1,11 +1,11 @@
 [package]
-name = "cryptomator-fuse-rs"
+name = "cryptomator-rs-fuse"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 fuser = "0.16"
-cryptomator-crypto = { path = "../cryptomator-crypto" }
+cryptomator-rs-crypto = { path = "../cryptomator-rs-crypto" }
 tracing = "0.1"
 tracing-attributes = "0.1"
 libc = "0.2.177"

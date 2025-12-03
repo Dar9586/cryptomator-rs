@@ -1,7 +1,5 @@
-/target
 /.idea
-/cryptomator-crypto/target
-/cryptomator-fuse-rs/target
 /mount
 
+**/target
 **/Cargo.lock

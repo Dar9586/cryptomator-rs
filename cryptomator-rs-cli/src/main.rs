@@ -55,22 +55,22 @@ fn main() -> Result<()> {
             error!("vault_root already exists");
             return Ok(())
         }
-        cryptomator_crypto::create_vault(&cli.vault_root, password.as_bytes())?;
+        cryptomator_rs_crypto::create_vault(&cli.vault_root, password.as_bytes())?;
     }
 
-    let mator = cryptomator_crypto::CryptomatorOpen {
+    let mator = cryptomator_rs_crypto::CryptomatorOpen {
         vault_path: cli.vault_root,
         password,
     }.open()?;
 
-    let fuse = cryptomator_fuse_rs::CryptoFuse::new(mator);
-    cryptomator_fuse_rs::mount2(
+    let fuse = cryptomator_rs_fuse::CryptoFuse::new(mator);
+    cryptomator_rs_fuse::mount2(
         fuse,
         cli.mount_point,
         &[
-            if cli.read_write{cryptomator_fuse_rs::MountOption::RW}else{cryptomator_fuse_rs::MountOption::RO},
-            cryptomator_fuse_rs::MountOption::AutoUnmount,
-            cryptomator_fuse_rs::MountOption::AllowRoot,
+            if cli.read_write{cryptomator_rs_fuse::MountOption::RW}else{cryptomator_rs_fuse::MountOption::RO},
+            cryptomator_rs_fuse::MountOption::AutoUnmount,
+            cryptomator_rs_fuse::MountOption::AllowRoot,
         ],
     )?;
 

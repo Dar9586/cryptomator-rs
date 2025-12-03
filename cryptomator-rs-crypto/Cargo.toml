@@ -1,5 +1,5 @@
 [package]
-name = "cryptomator-crypto"
+name = "cryptomator-rs-crypto"
 version = "0.1.0"
 edition = "2024"
 

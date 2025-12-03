@@ -1,5 +1,5 @@
 #![allow(clippy::too_many_arguments)]
-use cryptomator_crypto::{CryptoEntry, CryptoEntryType, CryptoError, Cryptomator, DirId, Seekable};
+use cryptomator_rs_crypto::{encrypted_file_size, encrypted_file_size_from_seekable, CryptoEntry, CryptoEntryType, CryptoError, Cryptomator, DirId, Seekable};
 use fuser::{FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyLseek, ReplyOpen, ReplyWrite, ReplyXattr, Request, TimeOrNow};
 use libc::{c_int, EBADF, EEXIST, EIO, ENOENT, O_CREAT, O_EXCL};
 use lru::LruCache;
@@ -162,7 +162,7 @@ fn file_to_file_attr(path: &CryptoEntryType) -> FuseResult<FileAttr> {
     if let CryptoEntryType::File { abs_path } = path {
         let metadata = fs::metadata(abs_path).map_err(|e| e.raw_os_error().unwrap_or(EIO))?;
         let ino = ino_from_entry(path);
-        let size = cryptomator_crypto::encrypted_file_size(abs_path).to_errno()?;
+        let size = encrypted_file_size(abs_path).to_errno()?;
         Ok(FileAttr {
             ino,
             size,
@@ -434,7 +434,7 @@ fn lseek(fuse: &mut CryptoFuse, _ino: u64, fh: u64, offset: i64, whence: i32) ->
     let FileHandle { seekable, offset: fd_offset, .. } = fuse.handles.get_mut(&fh).ok_or(EBADF)?;
     let new_offset = match whence {
         libc::SEEK_SET => 0,
-        libc::SEEK_END => cryptomator_crypto::encrypted_file_size_from_seekable(seekable).to_errno()? as i64,
+        libc::SEEK_END => encrypted_file_size_from_seekable(seekable).to_errno()? as i64,
         libc::SEEK_CUR => *fd_offset,
         libc::SEEK_DATA | libc::SEEK_HOLE => return Err(libc::EINVAL),
         _ => unreachable!()
