@@ -2,6 +2,10 @@
 name = "cryptomator-rs-cli"
 version = "0.1.0"
 edition = "2024"
+license-file = "../LICENSE"
+description = "Simple CLI to use create and unlock vaults"
+homepage = "https://github.com/Dar9586/cryptomator-rs"
+repository = "https://github.com/Dar9586/cryptomator-rs"
 
 [dependencies]
 cryptomator-rs-fuse = { path = "../cryptomator-rs-fuse" }
