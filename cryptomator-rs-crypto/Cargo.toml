@@ -6,6 +6,8 @@ license-file = "../LICENSE"
 description = "Rust implementation of Cryptomator Vault format"
 homepage = "https://github.com/Dar9586/cryptomator-rs"
 repository = "https://github.com/Dar9586/cryptomator-rs"
+categories = ["cryptography", "filesystem"]
+keywords = ["cryptomator", "filesystem"]
 
 [dependencies]
 scrypt = "0.11"

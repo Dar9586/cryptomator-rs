@@ -6,6 +6,8 @@ license-file = "../LICENSE"
 description = "Simple CLI to use create and unlock vaults"
 homepage = "https://github.com/Dar9586/cryptomator-rs"
 repository = "https://github.com/Dar9586/cryptomator-rs"
+categories = ["command-line-interface", "filesystem"]
+keywords = ["cryptomator", "filesystem", "fuse"]
 
 [dependencies]
 cryptomator-rs-fuse = { path = "../cryptomator-rs-fuse" }

@@ -6,6 +6,8 @@ license-file = "../LICENSE"
 description = "Simple FUSE filesystem"
 homepage = "https://github.com/Dar9586/cryptomator-rs"
 repository = "https://github.com/Dar9586/cryptomator-rs"
+categories = ["filesystem"]
+keywords = ["cryptomator", "filesystem", "fuse"]
 
 [dependencies]
 fuser = "0.16"
