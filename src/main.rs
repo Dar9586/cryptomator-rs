@@ -42,6 +42,10 @@ struct Cli {
 }
 
 fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_span_events(FmtSpan::ENTER)
+        .with_env_filter("info")
+        .init();
     let cli = Cli::parse();
 
     let password = get_password(&cli)?;

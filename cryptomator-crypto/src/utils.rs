@@ -41,14 +41,6 @@ pub(crate) const STDFILE_NAME:&str="name.c9s";
 pub(crate) const STDFILE_DIR:&str="dir.c9r";
 pub(crate) const STDFILE_CONTENTS:&str="contents.c9r";
 
-
-pub(crate) fn concat_vec<T: Clone>(v1: &[T], v2: &[T]) -> Vec<T> {
-    let mut res = Vec::with_capacity(v1.len() + v2.len());
-    res.extend_from_slice(v1);
-    res.extend_from_slice(v2);
-    res
-}
-
  #[inline]
 pub(crate) fn fill_array<T: Copy>(v: &mut [T], v1: &[T], v2: &[T]) {
     v[..v1.len()].copy_from_slice(v1);

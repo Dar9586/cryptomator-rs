@@ -15,19 +15,20 @@ use cmac::digest::consts::U64;
 use hmac::digest::core_api::CoreWrapper;
 use hmac::{Hmac, Mac};
 use jwt::header::HeaderType;
-use jwt::{AlgorithmType, Header, SignWithKey, Token, VerifyWithKey};
+use jwt::{AlgorithmType, Header, JoseHeader, SignWithKey, Token, VerifyWithKey, VerifyingAlgorithm};
 use rand::rngs::OsRng;
 use rand::TryRngCore;
 use scrypt::Params;
 use serde::{Deserialize, Serialize};
 use serde_with::base64::Base64;
 use serde_with::serde_as;
-use sha2::Sha256;
+use sha2::{Sha256, Sha384, Sha512};
 use std::fmt::{Debug, Formatter};
 use std::fs;
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
+use url::Url;
 use uuid::Uuid;
 
 pub struct CryptomatorOpen {
@@ -197,6 +198,7 @@ pub fn create_vault(vault_root: &Path, password: &[u8]) -> Result<()> {
     let mut scrypt_salt = uninit::<[u8; SCRYPT_SALT_SIZE]>();
     let mut wrapped_encryption_master = uninit::<[u8; ENC_KEY_LENGTH + SCRYPT_SALT_SIZE]>();
     let mut wrapped_mac_master = uninit::<[u8; MAC_KEY_LENGTH + SCRYPT_SALT_SIZE]>();
+    let mut supreme_key = uninit::<[u8; MAC_KEY_LENGTH+ENC_KEY_LENGTH]>();
     OsRng.try_fill_bytes(&mut encryption_master)?;
     OsRng.try_fill_bytes(&mut mac_master)?;
     OsRng.try_fill_bytes(&mut scrypt_salt)?;
@@ -230,7 +232,7 @@ pub fn create_vault(vault_root: &Path, password: &[u8]) -> Result<()> {
         type_: Some(HeaderType::JsonWebToken),
         content_type: None,
     };
-    let supreme_key = concat_vec(&encryption_master, &mac_master);
+    fill_array(&mut supreme_key, &encryption_master, &mac_master);
     let key: Hmac<Sha256> = <CoreWrapper<_> as Mac>::new_from_slice(&supreme_key)?;
     let token = Token::new(header, &vault_payload).sign_with_key(&key).map_err(|_| CryptoError::InvalidParameters)?;
 
@@ -268,24 +270,55 @@ pub fn create_vault(vault_root: &Path, password: &[u8]) -> Result<()> {
 
 impl CryptomatorOpen {
     pub fn open(&self) -> Result<Cryptomator> {
-        let masterkey_path = self.vault_path.join("masterkey.cryptomator");
-        let x = fs::read_to_string(&masterkey_path)?;
-        let masterkey: SerdeMasterKey = serde_json::from_str(&x)?;
         let vault_path = self.vault_path.join("vault.cryptomator");
         let vault_content = fs::read_to_string(vault_path.as_path())?;
-        // todo: parse header for non H256 and kid
-        let kek_param = Params::new(masterkey.scrypt_cost_param.ilog2() as u8, masterkey.scrypt_block_size, SCRYPT_PARALLELISM, SCRYPT_KEY_LENGTH).map_err(|_| CryptoError::InvalidParameters)?;
+        let token: Token<Header, VaultMetadata, _> = Token::parse_unverified(&vault_content).map_err(|_| CryptoError::CorruptedFile)?;
+        let key_id=token.header().key_id().ok_or(CryptoError::CorruptedFile)?;
+        let uri =Url::parse(key_id).map_err(|_|CryptoError::CorruptedFile)?;
+        if uri.scheme()!="masterkeyfile"{
+            return Err(CryptoError::Unsupported("scheme"));
+        }
+        if token.claims().cipher_combo!="SIV_GCM"{
+            return Err(CryptoError::Unsupported("cipher_combo"));
+        }
+        if token.header().algorithm!=AlgorithmType::Hs256{
+            return Err(CryptoError::Unsupported("algorithm"));
+        }
+
+        let masterkey_path = self.vault_path.join(uri.path());
+        let x = fs::read_to_string(&masterkey_path)?;
+        let masterkey: SerdeMasterKey = serde_json::from_str(&x)?;
         let mut kek_key = uninit::<[u8; KEK_KEY_LENGTH]>();
         let mut encryption_master = uninit::<[u8; ENC_KEY_LENGTH]>();
         let mut mac_master = uninit::<[u8; MAC_KEY_LENGTH]>();
+        let mut supreme_key = uninit::<[u8; MAC_KEY_LENGTH+ENC_KEY_LENGTH]>();
+        let kek_param = Params::new(masterkey.scrypt_cost_param.ilog2() as u8, masterkey.scrypt_block_size, SCRYPT_PARALLELISM, SCRYPT_KEY_LENGTH).map_err(|_| CryptoError::InvalidParameters)?;
         scrypt::scrypt(self.password.as_bytes(), &masterkey.scrypt_salt, &kek_param, &mut kek_key).map_err(|_| CryptoError::InvalidParameters)?;
         let kek = Kek::from(kek_key);
         kek.unwrap(&masterkey.primary_master_key, &mut encryption_master).unwrap();
         kek.unwrap(&masterkey.hmac_master_key, &mut mac_master).unwrap();
-        let supreme_key = concat_vec(&encryption_master, &mac_master);
-        let key: Hmac<Sha256> = <CoreWrapper<_> as Mac>::new_from_slice(&supreme_key)?;
+        fill_array(&mut supreme_key, &encryption_master, &mac_master);
+
+
+        let key:Box<dyn VerifyingAlgorithm>=match token.header().algorithm{
+            AlgorithmType::Hs256 => {
+                let key:Hmac<Sha256>=<CoreWrapper<_> as Mac>::new_from_slice(&supreme_key)?;
+                Box::new(key)
+            }
+            AlgorithmType::Hs384 => {
+                let key:Hmac<Sha384>=<CoreWrapper<_> as Mac>::new_from_slice(&supreme_key)?;
+                Box::new(key)
+            }
+            AlgorithmType::Hs512 => {
+                let key:Hmac<Sha512>=<CoreWrapper<_> as Mac>::new_from_slice(&supreme_key)?;
+                Box::new(key)
+            }
+            _=>return Err(CryptoError::CorruptedFile),
+        };
+
+        let _: Token<Header, VaultMetadata, _>=vault_content.verify_with_key(&key).map_err(|_| CryptoError::InvalidParameters)?;
+
         let mut mac_key: Hmac<Sha256> = <CoreWrapper<_> as Mac>::new_from_slice(&mac_master)?;
-        let token: Token<Header, VaultMetadata, _> = vault_content.verify_with_key(&key).map_err(|_| CryptoError::InvalidParameters)?;
         mac_key.update(&masterkey.version.to_be_bytes());
         mac_key.verify_slice(&masterkey.version_mac).map_err(|_| CryptoError::InvalidParameters)?;
         let mut siv_key = uninit::<[u8; MAC_KEY_LENGTH + ENC_KEY_LENGTH]>();

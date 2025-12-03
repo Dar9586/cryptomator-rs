@@ -23,6 +23,8 @@ pub enum CryptoError {
     SerializationError(#[from]serde_json::Error),
     #[error("unix errno")]
     UnixError(i32),
+    #[error("unsupported schema")]
+    Unsupported(&'static str),
 }
 
 impl CryptoError {
