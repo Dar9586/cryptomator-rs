@@ -40,7 +40,7 @@ pub(crate) const STDFILE_SYMLINK:&str="symlink.c9r";
 pub(crate) const STDFILE_NAME:&str="name.c9s";
 pub(crate) const STDFILE_DIR:&str="dir.c9r";
 pub(crate) const STDFILE_CONTENTS:&str="contents.c9r";
-
+pub(crate) const CRYPTOMATOR_VAULT_VERSION: u64 = 8;
  #[inline]
 pub(crate) fn fill_array<T: Copy>(v: &mut [T], v1: &[T], v2: &[T]) {
     v[..v1.len()].copy_from_slice(v1);

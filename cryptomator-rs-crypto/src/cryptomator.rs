@@ -278,6 +278,9 @@ impl CryptomatorOpen {
         if uri.scheme()!="masterkeyfile"{
             return Err(CryptoError::Unsupported("scheme"));
         }
+        if token.claims().format != CRYPTOMATOR_VAULT_VERSION {
+            return Err(CryptoError::Unsupported("vault_version"));
+        }
         if token.claims().cipher_combo!="SIV_GCM"{
             return Err(CryptoError::Unsupported("cipher_combo"));
         }
