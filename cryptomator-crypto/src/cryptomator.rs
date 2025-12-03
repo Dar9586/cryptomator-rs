@@ -115,7 +115,7 @@ impl EncryptedFilename {
 #[derive(Debug, Default)]
 pub struct EncryptedFileChunk {
     pub(crate) nonce: CryptoNonce,
-    pub(crate) encrypted_payload: Vec<u8>,
+    pub(crate) encrypted_payload: RoBytes,
     pub(crate) tag: CryptoTag,
 }
 
@@ -181,7 +181,7 @@ pub fn encrypt_chunk(data: &[u8], offset: u64, header_nonce: &CryptoNonce, conte
     dec.truncate(dec.len() - TAG_SIZE);
     Ok(EncryptedFileChunk {
         nonce: chunk_nonce,
-        encrypted_payload: dec,
+        encrypted_payload: dec.into(),
         tag,
     })
 }
@@ -367,11 +367,11 @@ impl Cryptomator {
         })
     }
 
-    pub fn filename_decrypt(&self, name: &str, parent: &DirId) -> Result<String> {
+    pub fn filename_decrypt(&self, name: &str, parent: &DirId) -> Result<RoString> {
         let x = base64_dec(name)?;
         let siv = self.aes_siv_dec(&x, Some(parent))?;
         let sss = String::from_utf8(siv).map_err(|_| CryptoError::CorruptedFilename)?;
-        Ok(sss)
+        Ok(sss.into())
     }
 
     pub fn get_root(&self) -> Result<DirId<'_>> {
@@ -397,8 +397,8 @@ impl Cryptomator {
         self.write_dirid_file(parent, &child)?;
 
         Ok(CryptoEntry {
-            name: name.to_string(),
-            entry_type: CryptoEntryType::Directory { dir_id: dir_id.to_vec() },
+            name: name.into(),
+            entry_type: CryptoEntryType::Directory { dir_id: dir_id.into() },
         })
     }
 
@@ -429,8 +429,8 @@ impl Cryptomator {
         let mut writer = self.file_writer(&mut f)?;
         writer.write(0, target.as_bytes())?;
         Ok(CryptoEntry {
-            name: name.to_string(),
-            entry_type: CryptoEntryType::Symlink { target: target.to_string() },
+            name: name.into(),
+            entry_type: CryptoEntryType::Symlink { target: target.into() },
         })
     }
 
@@ -553,7 +553,10 @@ impl Cryptomator {
         }
         let mut f = BufWriter::new(fs::File::create(&path)?);
         self.write_header(&mut f)?;
-        Ok(CryptoEntry { name: name.to_string(), entry_type: CryptoEntryType::File { abs_path: path } })
+        Ok(CryptoEntry {
+            name: name.into(),
+            entry_type: CryptoEntryType::File { abs_path: path },
+        })
     }
 }
 
@@ -578,7 +581,7 @@ pub(crate) fn read_and_decrypt_chunk<T: Read>(reader: &mut T, content_key: &Cryp
 
 #[derive(Clone, Hash)]
 pub enum CryptoEntryType {
-    Symlink { target: String },
+    Symlink { target: RoString },
     Directory { dir_id: DirIdData },
     File { abs_path: PathBuf },
 }
@@ -589,11 +592,7 @@ impl Debug for CryptoEntryType {
             CryptoEntryType::Symlink { target } => f.debug_struct("Symlink").field("target", target).finish(),
             CryptoEntryType::Directory { dir_id } => {
                 let mut s = f.debug_struct("Directory");
-                if let Ok(ss) = String::from_utf8(dir_id.clone()) {
-                    s.field("dir_id", &ss);
-                } else {
-                    s.field("dir_id", &dir_id);
-                }
+                s.field("dir_id", &String::from_utf8_lossy(dir_id));
                 s.finish()
             }
             CryptoEntryType::File { abs_path } => f.debug_struct("File").field("abs_path", abs_path).finish(),
@@ -626,7 +625,7 @@ impl CryptoEntryType {
         }
     }
 
-    pub fn symlink(&self) -> &String {
+    pub fn symlink(&self) -> &str {
         match self {
             CryptoEntryType::Symlink { target } => { target }
             _ => { panic!() }
@@ -636,7 +635,7 @@ impl CryptoEntryType {
 
 #[derive(Debug, Clone, Hash)]
 pub struct CryptoEntry {
-    pub name: String,
+    pub name: RoString,
     pub entry_type: CryptoEntryType,
 }
 
@@ -649,7 +648,7 @@ impl From<&[u8]> for EncryptedFileChunk {
         tag.copy_from_slice(&value[value.len() - TAG_SIZE..]);
         let encrypted_payload = value[NONCE_SIZE..value.len() - TAG_SIZE].to_vec();
         assert_eq!(encrypted_payload.len(), value.len() - NONCE_SIZE - TAG_SIZE);
-        Self { nonce, encrypted_payload, tag }
+        Self { nonce, encrypted_payload: encrypted_payload.into(), tag }
     }
 }
 

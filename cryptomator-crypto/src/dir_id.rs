@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug)]
 pub struct DirId<'a> {
     pub unencrypted: DirIdData,
-    prefix: String,
-    suffix: String,
+    prefix: RoString,
+    suffix: RoString,
     crypto: &'a Cryptomator,
 }
 impl<'a> DirId<'a> {
@@ -18,8 +18,8 @@ impl<'a> DirId<'a> {
         if !sub_dir_path.exists() { return Ok(None); }
         let dir_id = fs::read(sub_dir_path)?;
         Ok(Some(CryptoEntry {
-            name: dec_name.to_string(),
-            entry_type: CryptoEntryType::Directory { dir_id },
+            name: dec_name.into(),
+            entry_type: CryptoEntryType::Directory { dir_id: dir_id.into() },
         }))
     }
 
@@ -30,8 +30,8 @@ impl<'a> DirId<'a> {
         let target = self.crypto.read_entire_content(&mut reader)?;
         let target = String::from_utf8(target).map_err(|_| CryptoError::CorruptedFile)?;
         Ok(Some(CryptoEntry {
-            name: dec_name.to_string(),
-            entry_type: CryptoEntryType::Symlink { target },
+            name: dec_name.into(),
+            entry_type: CryptoEntryType::Symlink { target: target.into() },
         }))
     }
 
@@ -39,7 +39,7 @@ impl<'a> DirId<'a> {
         let file_file = abs_path.join(STDFILE_CONTENTS);
         if !file_file.exists() { return Ok(None); }
         Ok(Some(CryptoEntry {
-            name: dec_name.to_string(),
+            name: dec_name.into(),
             entry_type: CryptoEntryType::File { abs_path: file_file },
         }))
     }
@@ -117,7 +117,7 @@ impl<'a> DirId<'a> {
     }
 
     pub fn path(&self) -> PathBuf {
-        self.crypto.vault_root.join("d").join(&self.prefix).join(&self.suffix)
+        self.crypto.vault_root.join("d").join(self.prefix.as_ref()).join(self.suffix.as_ref())
     }
 
     pub fn from_str(str: &[u8], crypto: &'a Cryptomator) -> Result<Self> {
@@ -127,9 +127,9 @@ impl<'a> DirId<'a> {
         assert_eq!(encoded.len(), DIRID_NAME_LENGTH);
         let suffix = encoded.split_off(2);
         Ok(Self {
-            unencrypted: str.to_vec(),
-            prefix: encoded,
-            suffix,
+            unencrypted: str.into(),
+            prefix: encoded.into(),
+            suffix: suffix.into(),
             crypto,
         })
     }

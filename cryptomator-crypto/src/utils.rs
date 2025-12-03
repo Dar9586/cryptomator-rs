@@ -1,4 +1,3 @@
-use std::mem::MaybeUninit;
 use crate::errors;
 use crate::errors::CryptoError;
 use aes_gcm::aes::cipher::crypto_common::Output;
@@ -6,6 +5,7 @@ use base32::Alphabet;
 use base64::Engine;
 use cmac::digest::Digest;
 use sha1::Sha1;
+use std::mem::MaybeUninit;
 
 pub(crate) const UNUSED_CONTENT: [u8; 8] = [0xFF; 8];
 pub(crate) const CLEAR_FILE_CHUNK_SIZE: usize = 32768; //32 KiB
@@ -28,7 +28,9 @@ pub(crate) type CryptoNonce = [u8; NONCE_SIZE];
 pub(crate) type CryptoTag = [u8; TAG_SIZE];
 pub(crate) type CryptoAes256Key = [u8; AES256KEY_BYTES];
 pub(crate) const ENCRYPTED_CONTENT_KEY: usize = UNUSED_SIZE + AES256KEY_BYTES;
-pub(crate) type DirIdData = Vec<u8>;
+pub(crate) type RoString = Box<str>;
+pub(crate) type RoBytes = Box<[u8]>;
+pub(crate) type DirIdData = RoBytes;
 
 pub(crate) const COMPRESSED_EXTENSION:&str=".c9s";
 pub(crate) const ENCRYPTED_EXTENSION:&str=".c9r";

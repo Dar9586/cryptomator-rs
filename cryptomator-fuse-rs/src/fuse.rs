@@ -199,7 +199,7 @@ fn getattr(fuse: &mut CryptoFuse, ino: u64, _fh: Option<u64>) -> Result<FileAttr
         let attr = entry_to_file_attr(x)?;
         Ok(attr)
     } else if ino == 1 {
-        let entry = CryptoEntryType::Directory { dir_id: vec![] };
+        let entry = CryptoEntryType::Directory { dir_id: Box::new([]) };
         let x = entry_to_file_attr(&entry)?;
         fuse.insert_in_cache(x.ino, entry);
         Ok(x)
@@ -221,8 +221,16 @@ fn lookup(fuse: &mut CryptoFuse, parent: u64, name: &OsStr) -> Result<FileAttr, 
     Ok(attr)
 }
 
+#[derive(Debug)]
+struct ReadDirEntry {
+    ino: u64,
+    index: i64,
+    file_type: FileType,
+    name: Box<str>,
+}
+
 #[instrument(skip(fuse), level=Level::DEBUG,ret,err)]
-fn readdir(fuse: &mut CryptoFuse, ino: u64, _fh: u64, offset: i64) -> Result<Vec<(u64, i64, FileType, String)>, c_int> {
+fn readdir(fuse: &mut CryptoFuse, ino: u64, _fh: u64, offset: i64) -> Result<Vec<ReadDirEntry>, c_int> {
     let x = fuse.cache.get(&ino).to_errno()?;
     let dir_id = x.directory();
     let parent = DirId::from_str(dir_id, &fuse.crypto).to_errno()?;
@@ -233,7 +241,12 @@ fn readdir(fuse: &mut CryptoFuse, ino: u64, _fh: u64, offset: i64) -> Result<Vec
         let ino = entry_to_file_attr(&file.entry_type)?;
         let CryptoEntry { name, entry_type } = file.clone();
         fuse.cache.push(ino.ino, entry_type);
-        v.push((ino.ino, idx as i64 + 1, ino.kind, name));
+        v.push(ReadDirEntry {
+            ino: ino.ino,
+            index: idx as i64 + 1,
+            file_type: ino.kind,
+            name,
+        });
     }
     Ok(v)
 }
@@ -344,7 +357,6 @@ fn write(fuse: &mut CryptoFuse, _ino: u64, fh: u64, _offset: i64, data: &[u8], _
 fn create(fuse: &mut CryptoFuse, parent: u64, name: &OsStr, _mode: u32, _umask: u32, flags: i32, open_file: bool) -> Result<(FileAttr, u64), c_int> {
     let fuse_flags=FuseOpenOptions::from_flags(flags);
     let flags = flags & (!(O_CREAT | O_EXCL));
-    //
     let parent = fuse.cache.get(&parent).to_errno()?.directory();
     let name = name.to_str().to_errno()?;
     let dir_id = DirId::from_str(parent, &fuse.crypto).to_errno()?;
@@ -554,8 +566,8 @@ impl Filesystem for CryptoFuse {
         let res = readdir(self, ino, fh, offset);
         match res {
             Ok(x) => {
-                for (ino, offset, kind, name) in x {
-                    if reply.add(ino, offset, kind, name) { break; }
+                for ReadDirEntry { ino, index, file_type, name } in x {
+                    if reply.add(ino, index, file_type, name.as_ref()) { break; }
                 }
                 reply.ok();
             }
