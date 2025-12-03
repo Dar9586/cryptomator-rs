@@ -5,7 +5,7 @@ mod seekable_writer;
 mod dir_id;
 mod utils;
 mod errors;
-
+mod tests;
 
 pub use cryptomator::*;
 pub use dir_id::*;

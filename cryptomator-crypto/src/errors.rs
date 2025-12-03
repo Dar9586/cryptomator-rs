@@ -15,7 +15,7 @@ pub enum CryptoError {
     CorruptedFilename,
     #[error("error while performing crypto")]
     EncryptionError(#[from] aead::Error),
-    #[error("invalid kength for key/iv")]
+    #[error("invalid length for key/iv")]
     InvalidLength(#[from]InvalidLength),
     #[error("random generation failed")]
     OsError(#[from]OsError),

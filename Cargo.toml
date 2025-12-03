@@ -12,3 +12,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1.0"
 clap = { version = "4", features = ["derive"] }
 rpassword = "7"
+log = "0.4.28"

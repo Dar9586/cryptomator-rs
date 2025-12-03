@@ -189,9 +189,8 @@ const SCRYPT_SALT_SIZE: usize = 8;
 const SCRYPT_BLOCK_SIZE: u32 = 8;
 const SCRYPT_COST_LOG: u8 = 15;
 const MASTERKEY_VERSION: u32 = 999;
-pub fn create_vault(vault_root: &Path, password: &str) -> Result<()> {
+pub fn create_vault(vault_root: &Path, password: &[u8]) -> Result<()> {
     fs::create_dir_all(vault_root)?;
-    //let kek_param = Params::new(masterkey.scrypt_cost_param.ilog2() as u8, masterkey.scrypt_block_size, SCRYPT_PARALLELISM, SCRYPT_KEY_LENGTH).map_err(|_| CryptoError::InvalidParameters)?;
     let mut kek_key = uninit::<[u8; KEK_KEY_LENGTH]>();
     let mut encryption_master = uninit::<[u8; ENC_KEY_LENGTH]>();
     let mut mac_master = uninit::<[u8; MAC_KEY_LENGTH]>();
@@ -202,7 +201,7 @@ pub fn create_vault(vault_root: &Path, password: &str) -> Result<()> {
     OsRng.try_fill_bytes(&mut mac_master)?;
     OsRng.try_fill_bytes(&mut scrypt_salt)?;
     let params = Params::new(SCRYPT_COST_LOG, SCRYPT_BLOCK_SIZE, SCRYPT_PARALLELISM, SCRYPT_KEY_LENGTH).map_err(|_| CryptoError::InvalidParameters)?;
-    scrypt::scrypt(password.as_bytes(), &scrypt_salt, &params, &mut kek_key).map_err(|_| CryptoError::InvalidParameters)?;
+    scrypt::scrypt(password, &scrypt_salt, &params, &mut kek_key).map_err(|_| CryptoError::InvalidParameters)?;
     let kek = Kek::from(kek_key);
     kek.wrap(&encryption_master, &mut wrapped_encryption_master).map_err(|_| CryptoError::InvalidParameters)?;
     kek.wrap(&mac_master, &mut wrapped_mac_master).map_err(|_| CryptoError::InvalidParameters)?;
@@ -275,8 +274,6 @@ impl CryptomatorOpen {
         let vault_path = self.vault_path.join("vault.cryptomator");
         let vault_content = fs::read_to_string(vault_path.as_path())?;
         // todo: parse header for non H256 and kid
-        // let (header,_)=vault_content.split_once(".").unwrap();
-        // let header=Header::from_base64(header)?;
         let kek_param = Params::new(masterkey.scrypt_cost_param.ilog2() as u8, masterkey.scrypt_block_size, SCRYPT_PARALLELISM, SCRYPT_KEY_LENGTH).map_err(|_| CryptoError::InvalidParameters)?;
         let mut kek_key = uninit::<[u8; KEK_KEY_LENGTH]>();
         let mut encryption_master = uninit::<[u8; ENC_KEY_LENGTH]>();
@@ -340,7 +337,7 @@ impl Cryptomator {
     }
 
     pub(crate) fn aes_siv_enc(&self, data: &[u8], dir_id: Option<&DirId>) -> Result<Vec<u8>> {
-        let mut siv: aes_siv::siv::Siv<Aes256, cmac::Cmac<Aes256>> = aes_siv::siv::Siv::new(&self.siv_key); //::new(&GenericArray::from(supreme_key));
+        let mut siv: aes_siv::siv::Siv<Aes256, cmac::Cmac<Aes256>> = aes_siv::siv::Siv::new(&self.siv_key);
         Ok(match dir_id {
             Some(dir_id) => { siv.encrypt::<_, _>(&[&dir_id.unencrypted], data) }
             None => { siv.encrypt::<&[&[u8]], _>(&[], data) }
@@ -348,7 +345,7 @@ impl Cryptomator {
     }
 
     fn aes_siv_dec(&self, data: &[u8], dir_id: Option<&DirId>) -> Result<Vec<u8>> {
-        let mut siv: aes_siv::siv::Siv<Aes256, cmac::Cmac<Aes256>> = aes_siv::siv::Siv::new(&self.siv_key); //::new(&GenericArray::from(supreme_key));
+        let mut siv: aes_siv::siv::Siv<Aes256, cmac::Cmac<Aes256>> = aes_siv::siv::Siv::new(&self.siv_key);
         Ok(match dir_id {
             Some(dir_id) => { siv.decrypt::<_, _>(&[&dir_id.unencrypted], data) }
             None => { siv.decrypt::<&[&[u8]], _>(&[], data) }
@@ -674,18 +671,4 @@ pub fn read_file_header<T: Read>(reader: &mut T) -> Result<FileHeader> {
     reader.read_exact(&mut header.enc_content_key)?;
     reader.read_exact(&mut header.tag)?;
     Ok(header)
-}
-
-
-#[test]
-fn create_and_open_vault() -> Result<()> {
-    let password = "testtest";
-    let dir = tempdir::TempDir::new("vault")?;
-    let dir_path = dir.path();
-    create_vault(dir_path, password)?;
-    CryptomatorOpen {
-        vault_path: PathBuf::from(dir_path),
-        password: password.to_string(),
-    }.open()?;
-    Ok(())
 }
