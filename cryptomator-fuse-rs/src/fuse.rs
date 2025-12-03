@@ -264,7 +264,7 @@ fn read(fuse: &mut CryptoFuse, _ino: u64, fh: u64, offset: i64, size: u32, _flag
     let FileHandle { seekable, fuse_open_options, .. } = fuse.handles.get_mut(&fh).ok_or(EBADF)?;
     if !fuse_open_options.read { return Err(EBADF); }
     let mut x = fuse.crypto.read_seek(seekable).to_errno()?;
-    let read = x.read(offset as usize, size as usize).to_errno()?;
+    let read = x.read_data(offset as usize, size as usize).to_errno()?;
     //*offset+=read.len() as i64;
     Ok(read)
 }
@@ -348,7 +348,7 @@ fn write(fuse: &mut CryptoFuse, _ino: u64, fh: u64, _offset: i64, data: &[u8], _
     let FileHandle { seekable, offset, fuse_open_options, .. } = fuse.handles.get_mut(&fh).ok_or(EBADF)?;
     if !fuse_open_options.write { return Err(EBADF); }
     let mut writer = fuse.crypto.file_writer(seekable).to_errno()?;
-    writer.write(*offset as usize, data).to_errno()?;
+    writer.write_data(*offset as usize, data).to_errno()?;
     *offset+=data.len() as i64;
     Ok(data.len() as u32)
 }

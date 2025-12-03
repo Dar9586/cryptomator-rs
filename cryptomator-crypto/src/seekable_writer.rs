@@ -12,10 +12,40 @@ pub struct SeekableWriter<'b, T: Read + Write + Seek> {
     pub(crate) content_key: crate::utils::CryptoAes256Key,
 }
 
+
+
 const HOLE_BLOCKS_PER_ITER: usize = 2;
 
+impl<'b, T: Read + Write + Seek> Write for SeekableWriter<'b, T> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let pos=self.writer.stream_position()?;
+        self.write_data(pos as usize, buf).map_err(std::io::Error::other)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'b, T: Read + Write + Seek> Read for SeekableWriter<'b, T> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        SeekableReader {
+            reader: self.writer,
+            header: self.header,
+            content_key: self.content_key,
+        }.read(buf)
+    }
+}
+
+impl<'b, T: Read + Write + Seek> Seek for SeekableWriter<'b, T> {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.writer.seek(pos)
+    }
+}
+
 impl<'b, T: Read + Write + Seek> SeekableWriter<'b, T> {
-    pub fn write(&mut self, start_pos: usize, data: &[u8]) -> Result<()> {
+    pub fn write_data(&mut self, start_pos: usize, data: &[u8]) -> Result<()> {
         debug!("Writing {} bytes from offset {}", data.len(), start_pos);
         if data.is_empty() { return Ok(()); }
         let mut total_size = encrypted_file_size_from_seekable(&mut self.writer)? as usize;
@@ -23,7 +53,7 @@ impl<'b, T: Read + Write + Seek> SeekableWriter<'b, T> {
         while total_size < start_pos {
             let count = (HOLE_BLOCKS_PER_ITER * CLEAR_FILE_CHUNK_SIZE).min(start_pos - total_size);
             let data = vec![0; count];
-            self.write(total_size, &data)?;
+            self.write_data(total_size, &data)?;
             total_size += data.len();
         }
         let block_start = start_pos / CLEAR_FILE_CHUNK_SIZE;
@@ -38,13 +68,13 @@ impl<'b, T: Read + Write + Seek> SeekableWriter<'b, T> {
             content_key: self.content_key,
         };
         let mut before = if start_pos.is_multiple_of(CLEAR_FILE_CHUNK_SIZE) && data.len() >= CLEAR_FILE_CHUNK_SIZE { vec![] } else {
-            reader.read(write_start_pos, pos_within_start_chunk)?
+            reader.read_data(write_start_pos, pos_within_start_chunk)?
         };
         before.extend(repeat_n(0u8, pos_within_start_chunk.saturating_sub(before.len())));
         let after = if
         end_pos > total_size ||
             ((data.len() + start_pos).is_multiple_of(CLEAR_FILE_CHUNK_SIZE) && data.len() >= CLEAR_FILE_CHUNK_SIZE) { vec![] } else {
-            reader.read(end_pos + 1, CLEAR_FILE_CHUNK_SIZE - pos_within_end_chunk - 1)?
+            reader.read_data(end_pos + 1, CLEAR_FILE_CHUNK_SIZE - pos_within_end_chunk - 1)?
         };
         let mut write_buffer = Vec::with_capacity(before.len() + data.len() + after.len());
         write_buffer.extend(before);

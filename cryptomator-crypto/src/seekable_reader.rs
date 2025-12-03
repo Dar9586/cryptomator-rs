@@ -9,8 +9,24 @@ pub struct SeekableReader<'b, T: Read + Seek> {
     pub(crate) content_key: crate::utils::CryptoAes256Key,
 }
 
+impl<'b, T: Read + Seek> Read for SeekableReader<'b, T>{
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let pos=self.reader.stream_position()?;
+        let data=self.read_data(pos as usize, buf.len()).map_err(std::io::Error::other)?;
+        buf[..data.len()].copy_from_slice(&data);
+        Ok(data.len())
+    }
+
+}
+
+impl<'b, T: Read + Seek> Seek for SeekableReader<'b, T>{
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.reader.seek(pos)
+    }
+}
+
 impl<'b, T: Read + Seek> SeekableReader<'b, T> {
-    pub fn read(&mut self, pos: usize, length: usize) -> Result<Vec<u8>> {
+    pub fn read_data(&mut self, pos: usize, length: usize) -> Result<Vec<u8>> {
         debug!("Reading {} bytes from offset {}", length, pos);
         if length == 0 { return Ok(vec![]); }
         let block_start = pos / crate::utils::CLEAR_FILE_CHUNK_SIZE;

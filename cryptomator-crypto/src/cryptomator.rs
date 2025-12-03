@@ -263,7 +263,7 @@ pub fn create_vault(vault_root: &Path, password: &[u8]) -> Result<()> {
     let mut f = Seekable::from_path(&child_dir_id_file, true)?;
     mator.write_header(&mut f)?;
     let mut writer = mator.file_writer(&mut f)?;
-    writer.write(0, &id.unencrypted)?;
+    writer.write_data(0, &id.unencrypted)?;
 
     Ok(())
 }
@@ -441,7 +441,7 @@ impl Cryptomator {
         let mut f = Seekable::from_path(&child_dir_id_file,true)?;
         self.write_header(&mut f)?;
         let mut writer = self.file_writer(&mut f)?;
-        writer.write(0, &parent.unencrypted)?;
+        writer.write_data(0, &parent.unencrypted)?;
         Ok(())
     }
 
@@ -457,7 +457,7 @@ impl Cryptomator {
         let mut f = Seekable::from_path(&parent_dir_id_file,true)?;
         self.write_header(&mut f)?;
         let mut writer = self.file_writer(&mut f)?;
-        writer.write(0, target.as_bytes())?;
+        writer.write_data(0, target.as_bytes())?;
         Ok(CryptoEntry {
             name: name.into(),
             entry_type: CryptoEntryType::Symlink { target: target.into() },
@@ -504,7 +504,7 @@ impl Cryptomator {
     pub(crate) fn read_entire_content<T: Read+Seek>(&self, reader: &mut T) -> Result<Vec<u8>> {
         let size=encrypted_file_size_from_seekable(reader)?;
         let mut x = self.read_seek(reader)?;
-        x.read(0, size as usize)
+        x.read_data(0, size as usize)
     }
 
     pub fn read_seek<'b, T: Read + Seek>(&self, reader: &'b mut T) -> Result<SeekableReader<'b, T>> {
