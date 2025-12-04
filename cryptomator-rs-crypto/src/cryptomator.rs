@@ -99,14 +99,14 @@ impl EncryptedFilename {
     }
     pub fn get_compressed(&self) -> &str {
         match self {
-            EncryptedFilename::Encrypted(_) => panic!(),
+            EncryptedFilename::Encrypted(_) => unreachable!(),
             EncryptedFilename::Compressed(e) => e,
         }
     }
     pub fn get_encrypted(&self) -> &str {
         match self {
             EncryptedFilename::Encrypted(e) => e,
-            EncryptedFilename::Compressed(_) => panic!(),
+            EncryptedFilename::Compressed(_) => unreachable!(),
         }
     }
 }
@@ -295,8 +295,8 @@ impl CryptomatorOpen {
         let kek_param = Params::new(masterkey.scrypt_cost_param.ilog2() as u8, masterkey.scrypt_block_size, SCRYPT_PARALLELISM, SCRYPT_KEY_LENGTH).map_err(|_| CryptoError::InvalidParameters)?;
         scrypt::scrypt(self.password.as_bytes(), &masterkey.scrypt_salt, &kek_param, &mut kek_key).map_err(|_| CryptoError::InvalidParameters)?;
         let kek = Kek::from(kek_key);
-        kek.unwrap(&masterkey.primary_master_key, &mut encryption_master).unwrap();
-        kek.unwrap(&masterkey.hmac_master_key, &mut mac_master).unwrap();
+        kek.unwrap(&masterkey.primary_master_key, &mut encryption_master).map_err(|_| CryptoError::InvalidParameters)?;
+        kek.unwrap(&masterkey.hmac_master_key, &mut mac_master).map_err(|_| CryptoError::InvalidParameters)?;
         fill_array(&mut supreme_key, &encryption_master, &mac_master);
 
 
@@ -642,21 +642,21 @@ impl CryptoEntryType {
     pub fn directory(&self) -> &DirIdData {
         match self {
             CryptoEntryType::Directory { dir_id } => { dir_id }
-            _ => { panic!() }
+            _ => { unreachable!() }
         }
     }
 
     pub fn file(&self) -> &PathBuf {
         match self {
             CryptoEntryType::File { abs_path } => { abs_path }
-            _ => { panic!() }
+            _ => { unreachable!() }
         }
     }
 
     pub fn symlink(&self) -> &str {
         match self {
             CryptoEntryType::Symlink { target } => { target }
-            _ => { panic!() }
+            _ => { unreachable!() }
         }
     }
 }

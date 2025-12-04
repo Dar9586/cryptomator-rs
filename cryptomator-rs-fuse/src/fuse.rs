@@ -210,7 +210,7 @@ fn lookup(fuse: &mut CryptoFuse, parent: u64, name: &OsStr) -> Result<FileAttr, 
     let x = fuse.cache.get(&parent).to_errno()?;
     let dir_id = x.directory();
     let parent = DirId::from_str(dir_id, &fuse.crypto).to_errno()?;
-    let name = name.to_str().unwrap();
+    let name = name.to_str().to_errno()?;
     let child = parent.lookup(name).to_errno()?;
     let child = child.ok_or(ENOENT)?;
     let attr = entry_to_file_attr(&child.entry_type)?;

@@ -38,18 +38,16 @@ impl<T: Read + Write + Seek> Read for Seekable<T> {
 
 impl<T: Read + Write + Seek> Write for Seekable<T> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        if let Some(writer) = self.writer.as_mut() {
-            writer.write(buf)
-        } else {
-            panic!("Write called on read only Seekable");
+        match &mut self.writer {
+            None => Err(std::io::Error::other("bad file")),
+            Some(writer) => writer.write(buf)
         }
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        if let Some(writer) = self.writer.as_mut() {
-            writer.flush()
-        } else {
-            panic!("Write called on read only Seekable");
+        match &mut self.writer {
+            None => Err(std::io::Error::other("bad file")),
+            Some(writer) => writer.flush(),
         }
     }
 }
