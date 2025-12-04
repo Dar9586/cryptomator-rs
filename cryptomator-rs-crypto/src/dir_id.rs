@@ -40,7 +40,7 @@ impl<'a> DirId<'a> {
         if !file_file.exists() { return Ok(None); }
         Ok(Some(CryptoEntry {
             name: dec_name.into(),
-            entry_type: CryptoEntryType::File { abs_path: file_file },
+            entry_type: CryptoEntryType::File { abs_path: file_file.strip_prefix(&self.crypto.vault_root).map_err(|_| CryptoError::CorruptedFilename)?.to_path_buf().into_boxed_path() },
         }))
     }
 
@@ -112,7 +112,7 @@ impl<'a> DirId<'a> {
         let name = self.crypto.filename_decrypt(name_no_ext, self)?;
         Ok(CryptoEntry {
             name,
-            entry_type: CryptoEntryType::File { abs_path },
+            entry_type: CryptoEntryType::File { abs_path: abs_path.strip_prefix(&self.crypto.vault_root).map_err(|_| CryptoError::CorruptedFilename)?.to_path_buf().into_boxed_path() },
         })
     }
 

@@ -155,11 +155,12 @@ fn sym_to_file_attr(path: &CryptoEntryType) -> FuseResult<FileAttr> {
     }
 }
 
-fn file_to_file_attr(path: &CryptoEntryType) -> FuseResult<FileAttr> {
+fn file_to_file_attr(mator: &Cryptomator, path: &CryptoEntryType) -> FuseResult<FileAttr> {
     if let CryptoEntryType::File { abs_path } = path {
-        let metadata = fs::metadata(abs_path).map_err(|e| e.raw_os_error().unwrap_or(EIO))?;
+        let abs_path = mator.vault_root().join(abs_path);
+        let metadata = fs::metadata(&abs_path).map_err(|e| e.raw_os_error().unwrap_or(EIO))?;
         let ino = ino_from_entry(path);
-        let size = encrypted_file_size(abs_path).to_errno()?;
+        let size = encrypted_file_size(&abs_path).to_errno()?;
         Ok(FileAttr {
             ino,
             size,
@@ -183,21 +184,21 @@ fn file_to_file_attr(path: &CryptoEntryType) -> FuseResult<FileAttr> {
     }
 }
 
-fn entry_to_file_attr(entry: &CryptoEntryType) -> FuseResult<FileAttr> {
+fn entry_to_file_attr(vault_root: &Cryptomator, entry: &CryptoEntryType) -> FuseResult<FileAttr> {
     match entry {
         CryptoEntryType::Symlink { .. } => { sym_to_file_attr(entry) }
         CryptoEntryType::Directory { .. } => { dir_to_file_attr(entry) }
-        CryptoEntryType::File { .. } => { file_to_file_attr(entry) }
+        CryptoEntryType::File { .. } => { file_to_file_attr(vault_root, entry) }
     }
 }
 #[instrument(skip(fuse), level=Level::DEBUG,ret,err(level=Level::DEBUG))]
 fn getattr(fuse: &mut CryptoFuse, ino: u64, _fh: Option<u64>) -> Result<FileAttr, c_int> {
     if let Some(x) = fuse.cache.get(&ino) {
-        let attr = entry_to_file_attr(x)?;
+        let attr = entry_to_file_attr(&fuse.crypto, x)?;
         Ok(attr)
     } else if ino == 1 {
         let entry = CryptoEntryType::Directory { dir_id: Box::new([]) };
-        let x = entry_to_file_attr(&entry)?;
+        let x = entry_to_file_attr(&fuse.crypto, &entry)?;
         fuse.insert_in_cache(x.ino, entry);
         Ok(x)
     } else {
@@ -213,7 +214,7 @@ fn lookup(fuse: &mut CryptoFuse, parent: u64, name: &OsStr) -> Result<FileAttr, 
     let name = name.to_str().to_errno()?;
     let child = parent.lookup(name).to_errno()?;
     let child = child.ok_or(ENOENT)?;
-    let attr = entry_to_file_attr(&child.entry_type)?;
+    let attr = entry_to_file_attr(&fuse.crypto, &child.entry_type)?;
     fuse.insert_in_cache(attr.ino, child.entry_type);
     Ok(attr)
 }
@@ -235,7 +236,7 @@ fn readdir(fuse: &mut CryptoFuse, ino: u64, _fh: u64, offset: i64) -> Result<Vec
     files.sort_unstable_by(|o1, o2| o1.name.cmp(&o2.name));
     let mut v = Vec::new();
     for (idx, file) in files.iter().enumerate().skip(offset as usize) {
-        let ino = entry_to_file_attr(&file.entry_type)?;
+        let ino = entry_to_file_attr(&fuse.crypto, &file.entry_type)?;
         let CryptoEntry { name, entry_type } = file.clone();
         fuse.cache.push(ino.ino, entry_type);
         v.push(ReadDirEntry {
@@ -309,7 +310,7 @@ impl FuseOpenOptions {
 #[instrument(skip(fuse), level=Level::DEBUG,ret,err)]
 fn open(fuse: &mut CryptoFuse, ino: u64, flags: i32) -> Result<u64, c_int> {
     let k = fuse.cache.get(&ino).to_errno()?;
-    let path = k.file();
+    let path = fuse.crypto.vault_root().join(k.file());
     let options = FuseOpenOptions::from_flags(flags);
 
     if options.create_new {
@@ -317,7 +318,7 @@ fn open(fuse: &mut CryptoFuse, ino: u64, flags: i32) -> Result<u64, c_int> {
     }
 
     if options.truncate {
-        fuse.crypto.truncate_file(path).to_errno()?;
+        fuse.crypto.truncate_file(&path).to_errno()?;
     }
 
     let x = options.to_file_options().open(path).map_err(|x| {
@@ -356,7 +357,7 @@ fn create(fuse: &mut CryptoFuse, parent: u64, name: &OsStr, _mode: u32, _umask: 
     let name = name.to_str().to_errno()?;
     let dir_id = DirId::from_str(parent, &fuse.crypto).to_errno()?;
     let entry = fuse.crypto.create_file(&dir_id, name, fuse_flags.create_new).to_errno()?;
-    let attr = entry_to_file_attr(&entry.entry_type)?;
+    let attr = entry_to_file_attr(&fuse.crypto, &entry.entry_type)?;
     fuse.insert_in_cache(attr.ino, entry.entry_type);
     let fd = if open_file { open(fuse, attr.ino, flags)? } else { 0 };
     Ok((attr, fd))
@@ -365,7 +366,7 @@ fn create(fuse: &mut CryptoFuse, parent: u64, name: &OsStr, _mode: u32, _umask: 
 #[instrument(skip(fuse), level=Level::DEBUG,ret,err)]
 fn setattr(fuse: &mut CryptoFuse, ino: u64, _mode: Option<u32>, _uid: Option<u32>, _gid: Option<u32>, _size: Option<u64>, _atime: Option<TimeOrNow>, _mtime: Option<TimeOrNow>, _ctime: Option<SystemTime>, _fh: Option<u64>, _crtime: Option<SystemTime>, _chgtime: Option<SystemTime>, _bkuptime: Option<SystemTime>, _flags: Option<u32>) -> Result<FileAttr, c_int> {
     let k = fuse.cache.get(&ino).to_errno()?;
-    entry_to_file_attr(k)
+    entry_to_file_attr(&fuse.crypto, k)
 }
 
 #[instrument(skip(fuse), level=Level::DEBUG,ret,err)]
@@ -374,7 +375,7 @@ fn mkdir(fuse: &mut CryptoFuse, parent: u64, name: &OsStr, _mode: u32, _umask: u
     let name = name.to_str().to_errno()?;
     let dir_id = DirId::from_str(parent, &fuse.crypto).to_errno()?;
     let entry = fuse.crypto.create_directory(&dir_id, name).to_errno()?;
-    let attr = entry_to_file_attr(&entry.entry_type)?;
+    let attr = entry_to_file_attr(&fuse.crypto, &entry.entry_type)?;
     fuse.insert_in_cache(attr.ino, entry.entry_type);
     Ok(attr)
 }
@@ -386,7 +387,7 @@ fn symlink(fuse: &mut CryptoFuse, parent: u64, link_name: &OsStr, target: &Path)
     let target = target.to_str().to_errno()?;
     let dir_id = DirId::from_str(parent, &fuse.crypto).to_errno()?;
     let entry = fuse.crypto.create_symlink(&dir_id, link_name, target).to_errno()?;
-    let attr = entry_to_file_attr(&entry.entry_type)?;
+    let attr = entry_to_file_attr(&fuse.crypto, &entry.entry_type)?;
     fuse.insert_in_cache(attr.ino, entry.entry_type);
     Ok(attr)
 }

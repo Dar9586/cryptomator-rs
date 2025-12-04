@@ -6,6 +6,7 @@ use base64::Engine;
 use cmac::digest::Digest;
 use sha1::Sha1;
 use std::mem::MaybeUninit;
+use std::path::Path;
 
 pub(crate) const UNUSED_CONTENT: [u8; 8] = [0xFF; 8];
 pub(crate) const CLEAR_FILE_CHUNK_SIZE: usize = 32768; //32 KiB
@@ -30,6 +31,7 @@ pub(crate) type CryptoAes256Key = [u8; AES256KEY_BYTES];
 pub(crate) const ENCRYPTED_CONTENT_KEY: usize = UNUSED_SIZE + AES256KEY_BYTES;
 pub(crate) type RoString = Box<str>;
 pub(crate) type RoBytes = Box<[u8]>;
+pub(crate) type RoPath = Box<Path>;
 pub(crate) type DirIdData = RoBytes;
 
 pub(crate) const COMPRESSED_EXTENSION: &str = ".c9s";

@@ -356,9 +356,10 @@ impl Cryptomator {
                 self.delete_fs(&old_dir, old_name)?;
                 self.create_directory_with_dir_id(new_dir, new_name, &dir_id)?;
             }
-            CryptoEntryType::File { abs_path } => {
+            CryptoEntryType::File { abs_path: from_path } => {
                 let new_file = self.create_file(new_dir, new_name, true)?;
-                fs::rename(abs_path, new_file.entry_type.file())?;
+                let to_path = new_file.entry_type.file();
+                fs::rename(self.vault_root.join(from_path), self.vault_root.join(to_path))?;
                 self.delete_fs(old_dir, old_name)?;
             }
             CryptoEntryType::Symlink { target } => {
@@ -583,8 +584,12 @@ impl Cryptomator {
         self.write_header(&mut f)?;
         Ok(CryptoEntry {
             name: name.into(),
-            entry_type: CryptoEntryType::File { abs_path: path },
+            entry_type: CryptoEntryType::File { abs_path: path.strip_prefix(&self.vault_root).map_err(|_| CryptoError::CorruptedFilename)?.to_path_buf().into_boxed_path() },
         })
+    }
+
+    pub fn vault_root(&self) -> &Path {
+        &self.vault_root
     }
 }
 
@@ -611,7 +616,7 @@ pub(crate) fn read_and_decrypt_chunk<T: Read>(reader: &mut T, content_key: &Cryp
 pub enum CryptoEntryType {
     Symlink { target: RoString },
     Directory { dir_id: DirIdData },
-    File { abs_path: PathBuf },
+    File { abs_path: RoPath },
 }
 
 impl Debug for CryptoEntryType {
@@ -646,7 +651,7 @@ impl CryptoEntryType {
         }
     }
 
-    pub fn file(&self) -> &PathBuf {
+    pub fn file(&self) -> &Path {
         match self {
             CryptoEntryType::File { abs_path } => { abs_path }
             _ => { unreachable!() }
