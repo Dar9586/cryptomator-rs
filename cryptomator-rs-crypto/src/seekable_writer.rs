@@ -6,20 +6,20 @@ use itertools::repeat_n;
 use log::debug;
 use std::io::{Read, Seek, SeekFrom, Write};
 
+const HOLE_BLOCKS_PER_ITER: usize = 2;
+
+
 pub struct SeekableWriter<'b, T: Read + Write + Seek> {
     pub(crate) writer: &'b mut T,
     pub(crate) header: FileHeader,
     pub(crate) content_key: crate::utils::CryptoAes256Key,
+    pub(crate) offset: u64,
 }
 
-
-
-const HOLE_BLOCKS_PER_ITER: usize = 2;
-
 impl<'b, T: Read + Write + Seek> Write for SeekableWriter<'b, T> {
+
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let pos=self.writer.stream_position()?;
-        self.write_data(pos as usize, buf).map_err(std::io::Error::other)?;
+        self.write_data(self.offset as usize, buf).map_err(std::io::Error::other)?;
         Ok(buf.len())
     }
 
@@ -34,18 +34,50 @@ impl<'b, T: Read + Write + Seek> Read for SeekableWriter<'b, T> {
             reader: self.writer,
             header: self.header,
             content_key: self.content_key,
+            offset: self.offset
         }.read(buf)
     }
 }
 
 impl<'b, T: Read + Write + Seek> Seek for SeekableWriter<'b, T> {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        self.writer.seek(pos)
+        match pos {
+            SeekFrom::Start(v) => { self.offset = v }
+            SeekFrom::End(v) => {
+                let size = encrypted_file_size_from_seekable(self.writer).map_err(std::io::Error::other)?;
+                self.offset = crate::seekable_reader::calc_offset(size, v)?
+            }
+            SeekFrom::Current(v) => { self.offset = crate::seekable_reader::calc_offset(self.offset, v)?; }
+        }
+        Ok(self.offset)
+    }
+
+    fn rewind(&mut self) -> std::io::Result<()> {
+        self.offset = 0;
+        Ok(())
+    }
+
+    fn stream_position(&mut self) -> std::io::Result<u64> {
+        Ok(self.offset)
+    }
+
+    fn seek_relative(&mut self, offset: i64) -> std::io::Result<()> {
+        self.offset = crate::seekable_reader::calc_offset(self.offset, offset)?;
+        Ok(())
     }
 }
 
 impl<'b, T: Read + Write + Seek> SeekableWriter<'b, T> {
     pub fn write_data(&mut self, start_pos: usize, data: &[u8]) -> Result<()> {
+        let x = self.write_data_inner(start_pos, data);
+        self.seek(SeekFrom::Start(start_pos as u64 + match x {
+            Ok(_) => { data.len() as u64 },
+            Err(_) => { 0 }
+        }))?;
+        x
+    }
+
+    fn write_data_inner(&mut self, start_pos: usize, data: &[u8]) -> Result<()> {
         debug!("Writing {} bytes from offset {}", data.len(), start_pos);
         if data.is_empty() { return Ok(()); }
         let mut total_size = encrypted_file_size_from_seekable(&mut self.writer)? as usize;
@@ -66,6 +98,7 @@ impl<'b, T: Read + Write + Seek> SeekableWriter<'b, T> {
             reader: self.writer,
             header: self.header,
             content_key: self.content_key,
+            offset: self.offset
         };
         let mut before = if start_pos.is_multiple_of(CLEAR_FILE_CHUNK_SIZE) && data.len() >= CLEAR_FILE_CHUNK_SIZE { vec![] } else {
             reader.read_data(write_start_pos, pos_within_start_chunk)?

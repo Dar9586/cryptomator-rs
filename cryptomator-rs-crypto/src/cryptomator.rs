@@ -518,6 +518,7 @@ impl Cryptomator {
             reader,
             header,
             content_key,
+            offset: 0
         })
     }
 
@@ -548,6 +549,7 @@ impl Cryptomator {
             writer,
             header,
             content_key,
+            offset: 0
         })
     }
 
