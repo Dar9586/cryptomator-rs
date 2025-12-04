@@ -2,7 +2,7 @@
 name = "cryptomator-rs-fuse"
 version = "0.1.0"
 edition = "2024"
-license-file = "../LICENSE"
+license = "Apache-2.0"
 description = "Simple FUSE filesystem"
 homepage = "https://github.com/Dar9586/cryptomator-rs"
 repository = "https://github.com/Dar9586/cryptomator-rs"

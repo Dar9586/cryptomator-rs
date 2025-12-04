@@ -1,8 +1,8 @@
 [package]
 name = "cryptomator-rs-crypto"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
-license-file = "../LICENSE"
+license = "Apache-2.0"
 description = "Rust implementation of Cryptomator Vault format"
 homepage = "https://github.com/Dar9586/cryptomator-rs"
 repository = "https://github.com/Dar9586/cryptomator-rs"
