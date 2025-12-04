@@ -282,10 +282,6 @@ impl FuseOpenOptions {
         let mut options = File::options();
         if self.write { options.write(true); }
         if self.read || self.write { options.read(true); }
-        if self.append { options.append(true); }
-        if self.create { options.create(true); }
-        if self.create_new { options.create_new(true); }
-        if self.truncate { options.truncate(true); }
         options
     }
     fn from_flags(flags: i32) -> Self {
@@ -325,6 +321,10 @@ fn open(fuse: &mut CryptoFuse, ino: u64, flags: i32) -> Result<u64, c_int> {
         return Err(EEXIST);
     }
 
+    if options.truncate {
+        fuse.crypto.truncate_file(path).to_errno()?;
+    }
+
     let x = options.to_file_options().open(path).map_err(|x| {
         match x.raw_os_error() {
             None => EIO,
@@ -347,6 +347,9 @@ fn open(fuse: &mut CryptoFuse, ino: u64, flags: i32) -> Result<u64, c_int> {
 fn write(fuse: &mut CryptoFuse, _ino: u64, fh: u64, _offset: i64, data: &[u8], _write_flags: u32, _flags: i32, _lock_owner: Option<u64>) -> Result<u32, c_int> {
     let FileHandle { seekable, offset, fuse_open_options, .. } = fuse.handles.get_mut(&fh).ok_or(EBADF)?;
     if !fuse_open_options.write { return Err(EBADF); }
+    if fuse_open_options.append{
+        *offset = encrypted_file_size_from_seekable(seekable).to_errno()? as i64;
+    }
     let mut writer = fuse.crypto.file_writer(seekable).to_errno()?;
     writer.write_data(*offset as usize, data).to_errno()?;
     *offset+=data.len() as i64;

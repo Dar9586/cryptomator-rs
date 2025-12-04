@@ -380,6 +380,12 @@ impl Cryptomator {
         }?)
     }
 
+    pub fn truncate_file(&self, path: &PathBuf)->Result<()> {
+        let f = fs::File::options().write(true).open(path)?;
+        f.set_len(FILE_HEADER_SIZE as u64)?;
+        Ok(())
+    }
+
     fn aes_siv_dec(&self, data: &[u8], dir_id: Option<&DirId>) -> Result<Vec<u8>> {
         let mut siv: aes_siv::siv::Siv<Aes256, cmac::Cmac<Aes256>> = aes_siv::siv::Siv::new(&self.siv_key);
         Ok(match dir_id {
