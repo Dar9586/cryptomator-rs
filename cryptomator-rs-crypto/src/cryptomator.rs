@@ -147,7 +147,7 @@ struct VaultMetadata {
 
 pub fn decrypt_chunk(chunk: EncryptedFileChunk, content_key: &CryptoAes256Key, counter: u64, nonce: &CryptoNonce) -> Result<Vec<u8>> {
     let be_counter = counter.to_be_bytes();
-    let mut aad= uninit::<[u8; U64_BYTES + NONCE_SIZE]>();
+    let mut aad = uninit::<[u8; U64_BYTES + NONCE_SIZE]>();
     fill_array(&mut aad, &be_counter, nonce);
     let v = aes_gcm::Aes256Gcm::new_from_slice(content_key)?;
     let mut msg_and_tag = Vec::new();
@@ -196,7 +196,7 @@ pub fn create_vault(vault_root: &Path, password: &[u8]) -> Result<()> {
     let mut scrypt_salt = uninit::<[u8; SCRYPT_SALT_SIZE]>();
     let mut wrapped_encryption_master = uninit::<[u8; ENC_KEY_LENGTH + SCRYPT_SALT_SIZE]>();
     let mut wrapped_mac_master = uninit::<[u8; MAC_KEY_LENGTH + SCRYPT_SALT_SIZE]>();
-    let mut supreme_key = uninit::<[u8; MAC_KEY_LENGTH+ENC_KEY_LENGTH]>();
+    let mut supreme_key = uninit::<[u8; MAC_KEY_LENGTH + ENC_KEY_LENGTH]>();
     OsRng.try_fill_bytes(&mut encryption_master)?;
     OsRng.try_fill_bytes(&mut mac_master)?;
     OsRng.try_fill_bytes(&mut scrypt_salt)?;
@@ -270,18 +270,18 @@ impl CryptomatorOpen {
         let vault_path = self.vault_path.join("vault.cryptomator");
         let vault_content = fs::read_to_string(vault_path.as_path())?;
         let token: Token<Header, VaultMetadata, _> = Token::parse_unverified(&vault_content).map_err(|_| CryptoError::CorruptedFile)?;
-        let key_id=token.header().key_id().ok_or(CryptoError::CorruptedFile)?;
-        let uri =Url::parse(key_id).map_err(|_|CryptoError::CorruptedFile)?;
-        if uri.scheme()!="masterkeyfile"{
+        let key_id = token.header().key_id().ok_or(CryptoError::CorruptedFile)?;
+        let uri = Url::parse(key_id).map_err(|_| CryptoError::CorruptedFile)?;
+        if uri.scheme() != "masterkeyfile" {
             return Err(CryptoError::Unsupported("scheme"));
         }
         if token.claims().format != CRYPTOMATOR_VAULT_VERSION {
             return Err(CryptoError::Unsupported("vault_version"));
         }
-        if token.claims().cipher_combo!="SIV_GCM"{
+        if token.claims().cipher_combo != "SIV_GCM" {
             return Err(CryptoError::Unsupported("cipher_combo"));
         }
-        if token.header().algorithm!=AlgorithmType::Hs256{
+        if token.header().algorithm != AlgorithmType::Hs256 {
             return Err(CryptoError::Unsupported("algorithm"));
         }
 
@@ -291,7 +291,7 @@ impl CryptomatorOpen {
         let mut kek_key = uninit::<[u8; KEK_KEY_LENGTH]>();
         let mut encryption_master = uninit::<[u8; ENC_KEY_LENGTH]>();
         let mut mac_master = uninit::<[u8; MAC_KEY_LENGTH]>();
-        let mut supreme_key = uninit::<[u8; MAC_KEY_LENGTH+ENC_KEY_LENGTH]>();
+        let mut supreme_key = uninit::<[u8; MAC_KEY_LENGTH + ENC_KEY_LENGTH]>();
         let kek_param = Params::new(masterkey.scrypt_cost_param.ilog2() as u8, masterkey.scrypt_block_size, SCRYPT_PARALLELISM, SCRYPT_KEY_LENGTH).map_err(|_| CryptoError::InvalidParameters)?;
         scrypt::scrypt(self.password.as_bytes(), &masterkey.scrypt_salt, &kek_param, &mut kek_key).map_err(|_| CryptoError::InvalidParameters)?;
         let kek = Kek::from(kek_key);
@@ -300,23 +300,23 @@ impl CryptomatorOpen {
         fill_array(&mut supreme_key, &encryption_master, &mac_master);
 
 
-        let key:Box<dyn VerifyingAlgorithm>=match token.header().algorithm{
+        let key: Box<dyn VerifyingAlgorithm> = match token.header().algorithm {
             AlgorithmType::Hs256 => {
-                let key:Hmac<Sha256>=<CoreWrapper<_> as Mac>::new_from_slice(&supreme_key)?;
+                let key: Hmac<Sha256> = <CoreWrapper<_> as Mac>::new_from_slice(&supreme_key)?;
                 Box::new(key)
             }
             AlgorithmType::Hs384 => {
-                let key:Hmac<Sha384>=<CoreWrapper<_> as Mac>::new_from_slice(&supreme_key)?;
+                let key: Hmac<Sha384> = <CoreWrapper<_> as Mac>::new_from_slice(&supreme_key)?;
                 Box::new(key)
             }
             AlgorithmType::Hs512 => {
-                let key:Hmac<Sha512>=<CoreWrapper<_> as Mac>::new_from_slice(&supreme_key)?;
+                let key: Hmac<Sha512> = <CoreWrapper<_> as Mac>::new_from_slice(&supreme_key)?;
                 Box::new(key)
             }
-            _=>return Err(CryptoError::CorruptedFile),
+            _ => return Err(CryptoError::CorruptedFile),
         };
 
-        let _: Token<Header, VaultMetadata, _>=vault_content.verify_with_key(&key).map_err(|_| CryptoError::InvalidParameters)?;
+        let _: Token<Header, VaultMetadata, _> = vault_content.verify_with_key(&key).map_err(|_| CryptoError::InvalidParameters)?;
 
         let mut mac_key: Hmac<Sha256> = <CoreWrapper<_> as Mac>::new_from_slice(&mac_master)?;
         mac_key.update(&masterkey.version.to_be_bytes());
@@ -357,7 +357,7 @@ impl Cryptomator {
                 self.create_directory_with_dir_id(new_dir, new_name, &dir_id)?;
             }
             CryptoEntryType::File { abs_path } => {
-                let new_file = self.create_file(new_dir, new_name,true)?;
+                let new_file = self.create_file(new_dir, new_name, true)?;
                 fs::rename(abs_path, new_file.entry_type.file())?;
                 self.delete_fs(old_dir, old_name)?;
             }
@@ -377,7 +377,7 @@ impl Cryptomator {
         }?)
     }
 
-    pub fn truncate_file(&self, path: &PathBuf)->Result<()> {
+    pub fn truncate_file(&self, path: &PathBuf) -> Result<()> {
         let f = fs::File::options().write(true).open(path)?;
         f.set_len(FILE_HEADER_SIZE as u64)?;
         Ok(())
@@ -444,7 +444,7 @@ impl Cryptomator {
 
     fn write_dirid_file(&self, parent: &DirId, child: &DirId) -> Result<()> {
         let child_dir_id_file = child.path().join(STDFILE_DIRID);
-        let mut f = Seekable::from_path(&child_dir_id_file,true)?;
+        let mut f = Seekable::from_path(&child_dir_id_file, true)?;
         self.write_header(&mut f)?;
         let mut writer = self.file_handle(f)?;
         writer.write_all(&parent.unencrypted)?;
@@ -460,7 +460,7 @@ impl Cryptomator {
         }
         // write symlink.c9r with the target
         let parent_dir_id_file = parent_path_entry.join(STDFILE_SYMLINK);
-        let mut f = Seekable::from_path(&parent_dir_id_file,true)?;
+        let mut f = Seekable::from_path(&parent_dir_id_file, true)?;
         self.write_header(&mut f)?;
         let mut writer = self.file_handle(f)?;
         writer.write_all(target.as_bytes())?;
@@ -507,8 +507,8 @@ impl Cryptomator {
     }
 
 
-    pub(crate) fn read_entire_content<T: Read+Seek>(&self, reader: &mut T) -> Result<Vec<u8>> {
-        let size=encrypted_file_size_from_seekable(reader)?;
+    pub(crate) fn read_entire_content<T: Read + Seek>(&self, reader: &mut T) -> Result<Vec<u8>> {
+        let size = encrypted_file_size_from_seekable(reader)?;
         let mut x = self.file_handle(reader)?;
         let mut data = Vec::with_capacity(size as usize);
         x.read_to_end(&mut data)?;
@@ -542,7 +542,7 @@ impl Cryptomator {
             handle: reader,
             header,
             content_key,
-            offset: 0
+            offset: 0,
         })
     }
 
@@ -564,13 +564,13 @@ impl Cryptomator {
         Ok(())
     }
 
-    pub fn create_file(&self, dir_id: &DirId, name: &str,exclusive:bool) -> Result<CryptoEntry> {
-        if let Some(e)=dir_id.lookup(name)?{
-            return if exclusive{
-                 Err(UnixError(libc::EEXIST))
-            }else{
+    pub fn create_file(&self, dir_id: &DirId, name: &str, exclusive: bool) -> Result<CryptoEntry> {
+        if let Some(e) = dir_id.lookup(name)? {
+            return if exclusive {
+                Err(UnixError(libc::EEXIST))
+            } else {
                 Ok(e)
-            }
+            };
         }
         let v = self.filename_encrypt(name, dir_id, false)?;
         let enc_name = v.to_path_name();

@@ -9,19 +9,17 @@ pub struct Seekable<T: Read + Write + Seek> {
 }
 
 impl Seekable<File> {
-
-    pub fn from_path(f1: &Path,writable:bool) -> Result<Self> {
-        let file=File::options().read(true).write(writable).create(writable).open(f1)?;
-        Self::from_file(file,writable)
+    pub fn from_path(f1: &Path, writable: bool) -> Result<Self> {
+        let file = File::options().read(true).write(writable).create(writable).open(f1)?;
+        Self::from_file(file, writable)
     }
-    pub fn from_file(f1: File,writable:bool) -> Result<Self> {
+    pub fn from_file(f1: File, writable: bool) -> Result<Self> {
         if writable {
             let f2 = f1.try_clone()?;
             Ok(Self::new(f1, Some(f2)))
         } else {
             Ok(Self::new(f1, None))
         }
-
     }
 }
 impl<T: Read + Write + Seek> Seekable<T> {

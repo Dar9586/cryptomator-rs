@@ -330,7 +330,7 @@ fn open(fuse: &mut CryptoFuse, ino: u64, flags: i32) -> Result<u64, c_int> {
     let seekable = Seekable::from_file(x, options.write).to_errno()?;
     fuse.handles.insert(handle, FileHandle {
         _ino: ino,
-        _flags:flags,
+        _flags: flags,
         seekable: fuse.file_handle(seekable).to_errno()?,
         fuse_open_options: options,
     });
@@ -341,7 +341,7 @@ fn open(fuse: &mut CryptoFuse, ino: u64, flags: i32) -> Result<u64, c_int> {
 fn write(fuse: &mut CryptoFuse, _ino: u64, fh: u64, mut offset: i64, data: &[u8], _write_flags: u32, _flags: i32, _lock_owner: Option<u64>) -> Result<u32, c_int> {
     let FileHandle { seekable, fuse_open_options, .. } = fuse.handles.get_mut(&fh).ok_or(EBADF)?;
     if !fuse_open_options.write { return Err(EBADF); }
-    if fuse_open_options.append{
+    if fuse_open_options.append {
         offset = encrypted_file_size_from_seekable(seekable).to_errno()? as i64;
     }
     seekable.write_data(offset as usize, data).to_errno()?;
@@ -350,14 +350,14 @@ fn write(fuse: &mut CryptoFuse, _ino: u64, fh: u64, mut offset: i64, data: &[u8]
 
 #[instrument(skip(fuse), level=Level::DEBUG,ret,err)]
 fn create(fuse: &mut CryptoFuse, parent: u64, name: &OsStr, _mode: u32, _umask: u32, flags: i32, open_file: bool) -> Result<(FileAttr, u64), c_int> {
-    let fuse_flags=FuseOpenOptions::from_flags(flags);
+    let fuse_flags = FuseOpenOptions::from_flags(flags);
     let flags = flags & (!(O_CREAT | O_EXCL));
     let parent = fuse.cache.get(&parent).to_errno()?.directory();
     let name = name.to_str().to_errno()?;
     let dir_id = DirId::from_str(parent, &fuse.crypto).to_errno()?;
-    let entry = fuse.crypto.create_file(&dir_id, name,fuse_flags.create_new).to_errno()?;
+    let entry = fuse.crypto.create_file(&dir_id, name, fuse_flags.create_new).to_errno()?;
     let attr = entry_to_file_attr(&entry.entry_type)?;
-    fuse.insert_in_cache(attr.ino,entry.entry_type);
+    fuse.insert_in_cache(attr.ino, entry.entry_type);
     let fd = if open_file { open(fuse, attr.ino, flags)? } else { 0 };
     Ok((attr, fd))
 }
@@ -375,7 +375,7 @@ fn mkdir(fuse: &mut CryptoFuse, parent: u64, name: &OsStr, _mode: u32, _umask: u
     let dir_id = DirId::from_str(parent, &fuse.crypto).to_errno()?;
     let entry = fuse.crypto.create_directory(&dir_id, name).to_errno()?;
     let attr = entry_to_file_attr(&entry.entry_type)?;
-    fuse.insert_in_cache(attr.ino,entry.entry_type);
+    fuse.insert_in_cache(attr.ino, entry.entry_type);
     Ok(attr)
 }
 
@@ -387,7 +387,7 @@ fn symlink(fuse: &mut CryptoFuse, parent: u64, link_name: &OsStr, target: &Path)
     let dir_id = DirId::from_str(parent, &fuse.crypto).to_errno()?;
     let entry = fuse.crypto.create_symlink(&dir_id, link_name, target).to_errno()?;
     let attr = entry_to_file_attr(&entry.entry_type)?;
-    fuse.insert_in_cache(attr.ino,entry.entry_type);
+    fuse.insert_in_cache(attr.ino, entry.entry_type);
     Ok(attr)
 }
 
@@ -511,12 +511,12 @@ impl Filesystem for CryptoFuse {
         match res {
             Ok(x) => {
                 debug!("read {} bytes on fh {fh}, offset {offset}, size {size}", x.len());
-                reply.data(x.as_slice())},
+                reply.data(x.as_slice())
+            }
             Err(e) => reply.error(e),
         }
     }
     fn write(&mut self, _req: &Request<'_>, ino: u64, fh: u64, offset: i64, data: &[u8], write_flags: u32, flags: i32, lock_owner: Option<u64>, reply: ReplyWrite) {
-
         let res = write(self, ino, fh, offset, data, write_flags, flags, lock_owner);
         match res {
             Ok(x) => reply.written(x),

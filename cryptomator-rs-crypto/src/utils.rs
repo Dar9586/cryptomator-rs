@@ -32,16 +32,17 @@ pub(crate) type RoString = Box<str>;
 pub(crate) type RoBytes = Box<[u8]>;
 pub(crate) type DirIdData = RoBytes;
 
-pub(crate) const COMPRESSED_EXTENSION:&str=".c9s";
-pub(crate) const ENCRYPTED_EXTENSION:&str=".c9r";
-pub(crate) const EXTENSION_SIZE:usize=ENCRYPTED_EXTENSION.len();
-pub(crate) const STDFILE_DIRID:&str="dirid.c9r";
-pub(crate) const STDFILE_SYMLINK:&str="symlink.c9r";
-pub(crate) const STDFILE_NAME:&str="name.c9s";
-pub(crate) const STDFILE_DIR:&str="dir.c9r";
-pub(crate) const STDFILE_CONTENTS:&str="contents.c9r";
+pub(crate) const COMPRESSED_EXTENSION: &str = ".c9s";
+pub(crate) const ENCRYPTED_EXTENSION: &str = ".c9r";
+pub(crate) const EXTENSION_SIZE: usize = ENCRYPTED_EXTENSION.len();
+pub(crate) const STDFILE_DIRID: &str = "dirid.c9r";
+pub(crate) const STDFILE_SYMLINK: &str = "symlink.c9r";
+pub(crate) const STDFILE_NAME: &str = "name.c9s";
+pub(crate) const STDFILE_DIR: &str = "dir.c9r";
+pub(crate) const STDFILE_CONTENTS: &str = "contents.c9r";
 pub(crate) const CRYPTOMATOR_VAULT_VERSION: u64 = 8;
- #[inline]
+
+#[inline]
 pub(crate) fn fill_array<T: Copy>(v: &mut [T], v1: &[T], v2: &[T]) {
     v[..v1.len()].copy_from_slice(v1);
     v[v1.len()..].copy_from_slice(v2);
@@ -73,6 +74,6 @@ pub(crate) fn base64_dec(data: &str) -> errors::Result<Vec<u8>> {
 
 #[inline]
 #[allow(clippy::uninit_assumed_init)]
-pub fn uninit<T>()->T{
-    unsafe{MaybeUninit::uninit().assume_init()}
+pub fn uninit<T>() -> T {
+    unsafe { MaybeUninit::uninit().assume_init() }
 }

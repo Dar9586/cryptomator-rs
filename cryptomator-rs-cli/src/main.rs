@@ -7,8 +7,8 @@ use tracing_subscriber::fmt::format::FmtSpan;
 
 
 use clap::{ArgGroup, Parser};
-use std::fs;
 use log::error;
+use std::fs;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
@@ -50,10 +50,10 @@ fn main() -> Result<()> {
 
     let password = get_password(&cli)?;
 
-    if cli.create{
-        if fs::exists(&cli.vault_root)?{
+    if cli.create {
+        if fs::exists(&cli.vault_root)? {
             error!("vault_root already exists");
-            return Ok(())
+            return Ok(());
         }
         cryptomator_rs_crypto::create_vault(&cli.vault_root, password.as_bytes())?;
     }
@@ -68,7 +68,7 @@ fn main() -> Result<()> {
         fuse,
         cli.mount_point,
         &[
-            if cli.read_write{cryptomator_rs_fuse::MountOption::RW}else{cryptomator_rs_fuse::MountOption::RO},
+            if cli.read_write { cryptomator_rs_fuse::MountOption::RW } else { cryptomator_rs_fuse::MountOption::RO },
             cryptomator_rs_fuse::MountOption::AutoUnmount,
             cryptomator_rs_fuse::MountOption::AllowRoot,
         ],

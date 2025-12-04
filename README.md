@@ -1,6 +1,7 @@
 Rust implementation of Cryptomator Vault format
 
 # License
+
 ```
 Copyright 2025 Dar9586
 

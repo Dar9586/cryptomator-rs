@@ -1,7 +1,7 @@
 #![cfg(test)]
 
-use std::path::PathBuf;
 use crate::{create_vault, CryptomatorOpen};
+use std::path::PathBuf;
 
 #[test]
 fn create_and_open_vault() -> crate::Result<()> {
