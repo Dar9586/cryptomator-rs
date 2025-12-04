@@ -1,6 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 use cryptomator_rs_crypto::{encrypted_file_size, encrypted_file_size_from_seekable, CryptoEntry, CryptoEntryType, CryptoError, Cryptomator, DirId, Seekable};
-use fuser::{FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyLseek, ReplyOpen, ReplyWrite, ReplyXattr, Request, TimeOrNow};
+use fuser::{FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, ReplyXattr, Request, TimeOrNow};
 use libc::{c_int, EBADF, EEXIST, EIO, ENOENT, O_CREAT, O_EXCL};
 use lru::LruCache;
 use once_cell::sync::Lazy;
@@ -26,8 +26,7 @@ type FuseResult<T> = Result<T, c_int>;
 struct FileHandle {
     _ino: u64,
     _flags: i32,
-    seekable: Seekable<File>,
-    offset: i64,
+    seekable: cryptomator_rs_crypto::FileHandle<Seekable<File>>,
     fuse_open_options: FuseOpenOptions,
 }
 
@@ -47,9 +46,7 @@ impl CryptoFuse {
     fn insert_in_cache(&mut self, ino: u64, entry: CryptoEntryType) {
         self.cache.push(ino, entry);
     }
-}
 
-impl CryptoFuse {
     pub fn new(crypto: Cryptomator) -> Self {
         Self {
             crypto,
@@ -263,9 +260,7 @@ fn readlink(fuse: &mut CryptoFuse, ino: u64) -> Result<Vec<u8>, c_int> {
 fn read(fuse: &mut CryptoFuse, _ino: u64, fh: u64, offset: i64, size: u32, _flags: i32, _lock_owner: Option<u64>) -> Result<Vec<u8>, c_int> {
     let FileHandle { seekable, fuse_open_options, .. } = fuse.handles.get_mut(&fh).ok_or(EBADF)?;
     if !fuse_open_options.read { return Err(EBADF); }
-    let mut x = fuse.crypto.read_seek(seekable).to_errno()?;
-    let read = x.read_data(offset as usize, size as usize).to_errno()?;
-    //*offset+=read.len() as i64;
+    let read = seekable.read_data(offset as usize, size as usize).to_errno()?;
     Ok(read)
 }
 #[derive(Copy, Clone, Debug, Default)]
@@ -332,27 +327,24 @@ fn open(fuse: &mut CryptoFuse, ino: u64, flags: i32) -> Result<u64, c_int> {
         }
     })?;
     let handle = fuse.next_handle();
-    let seekable = Seekable::from_file(x,options.write).to_errno()?;
+    let seekable = Seekable::from_file(x, options.write).to_errno()?;
     fuse.handles.insert(handle, FileHandle {
         _ino: ino,
         _flags:flags,
-        seekable,
-        offset: 0,
+        seekable: fuse.file_handle(seekable).to_errno()?,
         fuse_open_options: options,
     });
     Ok(handle)
 }
 
 #[instrument(skip(fuse,data), level=Level::DEBUG,ret,err)]
-fn write(fuse: &mut CryptoFuse, _ino: u64, fh: u64, _offset: i64, data: &[u8], _write_flags: u32, _flags: i32, _lock_owner: Option<u64>) -> Result<u32, c_int> {
-    let FileHandle { seekable, offset, fuse_open_options, .. } = fuse.handles.get_mut(&fh).ok_or(EBADF)?;
+fn write(fuse: &mut CryptoFuse, _ino: u64, fh: u64, mut offset: i64, data: &[u8], _write_flags: u32, _flags: i32, _lock_owner: Option<u64>) -> Result<u32, c_int> {
+    let FileHandle { seekable, fuse_open_options, .. } = fuse.handles.get_mut(&fh).ok_or(EBADF)?;
     if !fuse_open_options.write { return Err(EBADF); }
     if fuse_open_options.append{
-        *offset = encrypted_file_size_from_seekable(seekable).to_errno()? as i64;
+        offset = encrypted_file_size_from_seekable(seekable).to_errno()? as i64;
     }
-    let mut writer = fuse.crypto.file_writer(seekable).to_errno()?;
-    writer.write_data(*offset as usize, data).to_errno()?;
-    *offset+=data.len() as i64;
+    seekable.write_data(offset as usize, data).to_errno()?;
     Ok(data.len() as u32)
 }
 
@@ -429,21 +421,6 @@ fn rename(fuse: &mut CryptoFuse, parent: u64, name: &OsStr, newparent: u64, newn
     let new_name = newname.to_str().to_errno()?;
     fuse.crypto.rename(&old_dir_id, old_name, &new_dir_id, new_name, flags & libc::RENAME_NOREPLACE != 0).to_errno()?;
     Ok(())
-}
-
-
-#[instrument(skip(fuse), level=Level::DEBUG,ret,err)]
-fn lseek(fuse: &mut CryptoFuse, _ino: u64, fh: u64, offset: i64, whence: i32) -> Result<i64, c_int> {
-    let FileHandle { seekable, offset: fd_offset, .. } = fuse.handles.get_mut(&fh).ok_or(EBADF)?;
-    let new_offset = match whence {
-        libc::SEEK_SET => 0,
-        libc::SEEK_END => encrypted_file_size_from_seekable(seekable).to_errno()? as i64,
-        libc::SEEK_CUR => *fd_offset,
-        libc::SEEK_DATA | libc::SEEK_HOLE => return Err(libc::EINVAL),
-        _ => unreachable!()
-    } + offset;
-    *fd_offset = new_offset;
-    Ok(new_offset)
 }
 
 #[allow(unused_variables)]
@@ -604,14 +581,6 @@ impl Filesystem for CryptoFuse {
         let res = create(self, parent, name, mode, umask, flags, true);
         match res {
             Ok((attr, fd)) => reply.created(&Duration::from_secs(2), &attr, 0, fd, 0),
-            Err(e) => reply.error(e),
-        }
-    }
-
-    fn lseek(&mut self, _req: &Request<'_>, ino: u64, fh: u64, offset: i64, whence: i32, reply: ReplyLseek) {
-        let res = lseek(self, ino, fh, offset, whence);
-        match res {
-            Ok(v) => reply.offset(v),
             Err(e) => reply.error(e),
         }
     }

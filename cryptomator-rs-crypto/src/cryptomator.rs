@@ -2,10 +2,8 @@ use crate::dir_id::DirId;
 use crate::errors::CryptoError;
 use crate::errors::CryptoError::UnixError;
 use crate::errors::Result;
-use crate::seekable_reader::SeekableReader;
-use crate::seekable_writer::SeekableWriter;
 use crate::utils::*;
-use crate::Seekable;
+use crate::{FileHandle, Seekable};
 use aes_gcm::aes::Aes256;
 use aes_gcm::{aead::{Aead, KeyInit}, Nonce};
 use aes_kw::Kek;
@@ -262,9 +260,8 @@ pub fn create_vault(vault_root: &Path, password: &[u8]) -> Result<()> {
     let child_dir_id_file = id.path().join(STDFILE_DIRID);
     let mut f = Seekable::from_path(&child_dir_id_file, true)?;
     mator.write_header(&mut f)?;
-    let mut writer = mator.file_writer(&mut f)?;
-    writer.write_data(0, &id.unencrypted)?;
-
+    let mut writer = mator.file_handle(f)?;
+    writer.write_all(&id.unencrypted)?;
     Ok(())
 }
 
@@ -449,8 +446,8 @@ impl Cryptomator {
         let child_dir_id_file = child.path().join(STDFILE_DIRID);
         let mut f = Seekable::from_path(&child_dir_id_file,true)?;
         self.write_header(&mut f)?;
-        let mut writer = self.file_writer(&mut f)?;
-        writer.write_data(0, &parent.unencrypted)?;
+        let mut writer = self.file_handle(f)?;
+        writer.write_all(&parent.unencrypted)?;
         Ok(())
     }
 
@@ -465,8 +462,8 @@ impl Cryptomator {
         let parent_dir_id_file = parent_path_entry.join(STDFILE_SYMLINK);
         let mut f = Seekable::from_path(&parent_dir_id_file,true)?;
         self.write_header(&mut f)?;
-        let mut writer = self.file_writer(&mut f)?;
-        writer.write_data(0, target.as_bytes())?;
+        let mut writer = self.file_handle(f)?;
+        writer.write_all(target.as_bytes())?;
         Ok(CryptoEntry {
             name: name.into(),
             entry_type: CryptoEntryType::Symlink { target: target.into() },
@@ -512,20 +509,10 @@ impl Cryptomator {
 
     pub(crate) fn read_entire_content<T: Read+Seek>(&self, reader: &mut T) -> Result<Vec<u8>> {
         let size=encrypted_file_size_from_seekable(reader)?;
-        let mut x = self.read_seek(reader)?;
-        x.read_data(0, size as usize)
-    }
-
-    pub fn read_seek<'b, T: Read + Seek>(&self, reader: &'b mut T) -> Result<SeekableReader<'b, T>> {
-        reader.seek(SeekFrom::Start(0))?;
-        let header = read_file_header(reader)?;
-        let (_, content_key) = self.decrypt_header(&header)?;
-        Ok(SeekableReader {
-            reader,
-            header,
-            content_key,
-            offset: 0
-        })
+        let mut x = self.file_handle(reader)?;
+        let mut data = Vec::with_capacity(size as usize);
+        x.read_to_end(&mut data)?;
+        Ok(data)
     }
 
     pub fn create_file_header(&self) -> Result<(FileHeader, CryptoAes256Key)> {
@@ -547,12 +534,12 @@ impl Cryptomator {
         }, content_key))
     }
 
-    pub fn file_writer<'b, T: Read + Write + Seek>(&self, writer: &'b mut T) -> Result<SeekableWriter<'b, T>> {
-        writer.seek(SeekFrom::Start(0))?;
-        let header = read_file_header(writer)?;
+    pub fn file_handle<T: Read + Seek>(&self, mut reader: T) -> Result<FileHandle<T>> {
+        reader.seek(SeekFrom::Start(0))?;
+        let header = read_file_header(&mut reader)?;
         let (_, content_key) = self.decrypt_header(&header)?;
-        Ok(SeekableWriter {
-            writer,
+        Ok(FileHandle {
+            handle: reader,
             header,
             content_key,
             offset: 0
