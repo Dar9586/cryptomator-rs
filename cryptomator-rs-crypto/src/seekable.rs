@@ -1,4 +1,5 @@
 use crate::errors::Result;
+use crate::CryptoError;
 use libc::EBADF;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
@@ -26,6 +27,11 @@ impl<R: Read + Seek, W: Write + Seek> SeekableRw<R, W> {
             writer: BufWriter::new(writer),
             reader: BufReader::new(reader),
         }
+    }
+    pub fn into_inner(self) -> Result<(R, W)> {
+        let inner = self.writer.into_inner()
+            .map_err(|_| CryptoError::IO(std::io::Error::other("flush")))?;
+        Ok((self.reader.into_inner(), inner))
     }
 }
 impl<R: Read + Seek, W: Write + Seek> Read for SeekableRw<R, W> {
@@ -69,6 +75,10 @@ impl<R: Read + Seek> SeekableRo<R> {
         Self {
             reader: BufReader::new(reader),
         }
+    }
+
+    pub fn into_inner(self) -> R {
+        self.reader.into_inner()
     }
 }
 impl<R: Read + Seek> Read for SeekableRo<R> {

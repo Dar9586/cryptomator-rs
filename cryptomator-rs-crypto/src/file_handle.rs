@@ -176,15 +176,26 @@ impl<T: Read + Seek> FileHandle<T> {
         }))?;
         x
     }
+
+    #[allow(clippy::uninit_vec)]
     pub fn read_data(&mut self, pos: usize, length: usize) -> Result<Vec<u8>> {
+        if length == 0 { return Ok(vec![]); }
         debug!("Reading {} bytes from offset {}", length, pos);
-        let mut x = vec![0; length];
-        self.read_buf(pos, &mut x)?;
+        let mut x = Vec::with_capacity(length);
+        unsafe { x.set_len(length); }
+        let size = self.read_buf(pos, &mut x)?;
+        x.truncate(size);
         Ok(x)
     }
     pub fn file_size(&mut self) -> Result<u64> {
+        let pos = self.handle.stream_position()?;
         let total_size = self.handle.seek(SeekFrom::End(0))?;
+        self.seek(SeekFrom::Start(pos))?;
         file_size_from_size(total_size)
+    }
+
+    pub fn into_inner(self) -> T {
+        self.handle
     }
 }
 
@@ -194,13 +205,13 @@ impl<T: Read + Write + Seek> FileHandle<T> {
         debug!("Writing {} bytes from offset {}", data.len(), start_pos);
         if data.is_empty() { return Ok(()); }
         let mut total_size = self.file_size()? as usize;
-        let end_pos = start_pos + data.len() - 1;
         while total_size < start_pos {
             let count = (HOLE_BLOCKS_PER_ITER * CLEAR_FILE_CHUNK_SIZE).min(start_pos - total_size);
             let data = vec![0; count];
             self.write_data(total_size, &data)?;
             total_size += data.len();
         }
+        let end_pos = start_pos + data.len() - 1;
         let block_start = start_pos / CLEAR_FILE_CHUNK_SIZE;
         let write_start_pos = block_start * CLEAR_FILE_CHUNK_SIZE;
         let block_start_off = FILE_HEADER_SIZE + block_start * FILE_CHUNK_SIZE;
@@ -234,6 +245,7 @@ impl<T: Read + Write + Seek> FileHandle<T> {
         Ok(())
     }
     pub fn write_data(&mut self, start_pos: usize, data: &[u8]) -> Result<()> {
+        if data.is_empty() { return Ok(()); }
         let x = self.write_data_inner(start_pos, data);
         self.seek(SeekFrom::Start(start_pos as u64 + match x {
             Ok(_) => { data.len() as u64 }

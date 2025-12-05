@@ -320,7 +320,7 @@ fn open(fuse: &mut CryptoFuse, ino: u64, flags: i32) -> Result<u64, c_int> {
     }
 
     if options.truncate {
-        fuse.crypto.truncate_file(&path).to_errno()?;
+        fuse.crypto.truncate_to_size(&path, 0).to_errno()?;
     }
 
     let x = options.to_file_options().open(path).map_err(|x| {
@@ -523,6 +523,7 @@ impl Filesystem for CryptoFuse {
             Err(e) => reply.error(e),
         }
     }
+
     fn write(&mut self, _req: &Request<'_>, ino: u64, fh: u64, offset: i64, data: &[u8], write_flags: u32, flags: i32, lock_owner: Option<u64>, reply: ReplyWrite) {
         let res = write(self, ino, fh, offset, data, write_flags, flags, lock_owner);
         match res {

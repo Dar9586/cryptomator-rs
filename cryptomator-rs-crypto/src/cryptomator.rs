@@ -447,10 +447,20 @@ impl Cryptomator {
         Ok(Some(()))
     }
 
-    pub fn truncate_file(&self, path: &PathBuf) -> Result<()> {
-        let f = fs::File::options().write(true).open(path)?;
-        f.set_len(FILE_HEADER_SIZE as u64)?;
-        Ok(())
+    pub fn truncate_to_size(&self, path: &Path, new_size: usize) -> Result<()> {
+        let size = Self::encrypted_file_size(path)? as usize;
+        if new_size == size { return Ok(()); }
+        let chunks = new_size / CLEAR_FILE_CHUNK_SIZE;
+        let block_start = (new_size / CLEAR_FILE_CHUNK_SIZE) * CLEAR_FILE_CHUNK_SIZE;
+        let f = fs::File::options().read(true).write(true).open(path)?;
+        let mut handle = self.file_handle(SeekableRw::from_path(path)?)?;
+        if new_size > size {
+            handle.write_data(new_size - 1, &[0])
+        } else {
+            let data = handle.read_data(block_start, new_size % CLEAR_FILE_CHUNK_SIZE)?;
+            f.set_len((FILE_HEADER_SIZE + (chunks * FILE_CHUNK_SIZE)) as u64)?;
+            handle.write_data(block_start, &data)
+        }
     }
 
     pub fn create_directory(&self, parent: &DirId, name: &str) -> Result<CryptoEntry> {
@@ -533,7 +543,7 @@ impl Cryptomator {
     }
 }
 
-fn delete_file(file_path: &PathBuf) -> Result<()> {
+fn delete_file(file_path: &Path) -> Result<()> {
     if !file_path.exists() { return Ok(()); }
     if file_path.is_dir() {
         fs::remove_dir_all(file_path)?
