@@ -44,43 +44,6 @@ impl<'a> DirId<'a> {
         }))
     }
 
-    pub fn lookup(&self, unencrypted_name: &str) -> Result<Option<CryptoEntry>> {
-        let encrypted_name = self.crypto.filename_encrypt(unencrypted_name, self, false)?;
-        self.lookup_enc(&encrypted_name.to_path_name())
-    }
-
-    fn lookup_enc(&self, name: &str) -> Result<Option<CryptoEntry>> {
-        let abs_path = self.path().join(name);
-        if !abs_path.exists() { return Ok(None); }
-        let meta = abs_path.metadata()?;
-        let entry_type = meta.file_type();
-        let name_no_ext = &name[..name.len() - EXTENSION_SIZE];
-        if entry_type.is_file() {
-            Ok(Some(self.parse_file(abs_path, name_no_ext)?))
-        } else if entry_type.is_dir() {
-            Ok(Some(self.parse_dir(name, &abs_path, name_no_ext)?))
-        } else {
-            Err(CryptoError::CorruptedFilename)
-        }
-    }
-
-    pub fn list_files(&self) -> Result<Vec<CryptoEntry>> {
-        let mut entries = Vec::new();
-        let dir_path = self.path();
-        for entry in fs::read_dir(&dir_path)? {
-            let entry = entry?;
-            let name = entry.file_name();
-            let name = name.to_str().ok_or(CryptoError::CorruptedFilename)?;
-            if name == STDFILE_DIRID {
-                continue;
-            }
-            if let Some(entry) = self.lookup_enc(name)? {
-                entries.push(entry);
-            }
-        }
-        Ok(entries)
-    }
-
     fn parse_dir(&self, name: &str, abs_path: &Path, name_no_ext: &str) -> Result<CryptoEntry> {
         let compressed = name.ends_with(COMPRESSED_EXTENSION);
         if !compressed {
@@ -116,6 +79,26 @@ impl<'a> DirId<'a> {
         })
     }
 
+    pub fn lookup(&self, unencrypted_name: &str) -> Result<Option<CryptoEntry>> {
+        let encrypted_name = self.crypto.filename_encrypt(unencrypted_name, self, false)?;
+        self.lookup_enc(&encrypted_name.to_path_name())
+    }
+
+    fn lookup_enc(&self, name: &str) -> Result<Option<CryptoEntry>> {
+        let abs_path = self.path().join(name);
+        if !abs_path.exists() { return Ok(None); }
+        let meta = abs_path.metadata()?;
+        let entry_type = meta.file_type();
+        let name_no_ext = &name[..name.len() - EXTENSION_SIZE];
+        if entry_type.is_file() {
+            Ok(Some(self.parse_file(abs_path, name_no_ext)?))
+        } else if entry_type.is_dir() {
+            Ok(Some(self.parse_dir(name, &abs_path, name_no_ext)?))
+        } else {
+            Err(CryptoError::CorruptedFilename)
+        }
+    }
+
     pub fn path(&self) -> PathBuf {
         self.crypto.vault_root.join("d").join(self.prefix.as_ref()).join(self.suffix.as_ref())
     }
@@ -132,6 +115,23 @@ impl<'a> DirId<'a> {
             suffix: suffix.into(),
             crypto,
         })
+    }
+
+    pub fn list_files(&self) -> Result<Vec<CryptoEntry>> {
+        let mut entries = Vec::new();
+        let dir_path = self.path();
+        for entry in fs::read_dir(&dir_path)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_str().ok_or(CryptoError::CorruptedFilename)?;
+            if name == STDFILE_DIRID {
+                continue;
+            }
+            if let Some(entry) = self.lookup_enc(name)? {
+                entries.push(entry);
+            }
+        }
+        Ok(entries)
     }
 }
 

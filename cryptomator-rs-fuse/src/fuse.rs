@@ -1,5 +1,5 @@
 #![allow(clippy::too_many_arguments)]
-use cryptomator_rs_crypto::{encrypted_file_size, encrypted_file_size_from_seekable, CryptoEntry, CryptoEntryType, CryptoError, Cryptomator, DirId, Seekable};
+use cryptomator_rs_crypto::{CryptoEntry, CryptoEntryType, CryptoError, Cryptomator, DirId, Seekable, SeekableRo, SeekableRw};
 use fuser::{FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, ReplyXattr, Request, TimeOrNow};
 use libc::{c_int, EBADF, EEXIST, EIO, ENOENT, O_CREAT, O_EXCL};
 use lru::LruCache;
@@ -23,10 +23,12 @@ static GID: Lazy<u32> = Lazy::new(getgid);
 const BLOCK_SIZE: u32 = 512;
 const PERMISSIONS: u16 = 0o777;
 type FuseResult<T> = Result<T, c_int>;
+
+
 struct FileHandle {
     _ino: u64,
     _flags: i32,
-    seekable: cryptomator_rs_crypto::FileHandle<Seekable<File>>,
+    seekable: cryptomator_rs_crypto::FileHandle<Seekable<File, File>>,
     fuse_open_options: FuseOpenOptions,
 }
 
@@ -160,7 +162,7 @@ fn file_to_file_attr(mator: &Cryptomator, path: &CryptoEntryType) -> FuseResult<
         let abs_path = mator.vault_root().join(abs_path);
         let metadata = fs::metadata(&abs_path).map_err(|e| e.raw_os_error().unwrap_or(EIO))?;
         let ino = ino_from_entry(path);
-        let size = encrypted_file_size(&abs_path).to_errno()?;
+        let size = Cryptomator::encrypted_file_size(&abs_path).to_errno()?;
         Ok(FileAttr {
             ino,
             size,
@@ -328,7 +330,11 @@ fn open(fuse: &mut CryptoFuse, ino: u64, flags: i32) -> Result<u64, c_int> {
         }
     })?;
     let handle = fuse.next_handle();
-    let seekable = Seekable::from_file(x, options.write).to_errno()?;
+    let seekable = if options.write {
+        Seekable::Rw(SeekableRw::from_file(x).to_errno()?)
+    } else {
+        Seekable::Ro(SeekableRo::from_file(x))
+    };
     fuse.handles.insert(handle, FileHandle {
         _ino: ino,
         _flags: flags,
@@ -343,7 +349,7 @@ fn write(fuse: &mut CryptoFuse, _ino: u64, fh: u64, mut offset: i64, data: &[u8]
     let FileHandle { seekable, fuse_open_options, .. } = fuse.handles.get_mut(&fh).ok_or(EBADF)?;
     if !fuse_open_options.write { return Err(EBADF); }
     if fuse_open_options.append {
-        offset = encrypted_file_size_from_seekable(seekable).to_errno()? as i64;
+        offset = seekable.file_size().to_errno()? as i64;
     }
     seekable.write_data(offset as usize, data).to_errno()?;
     Ok(data.len() as u32)

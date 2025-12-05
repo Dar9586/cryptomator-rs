@@ -74,8 +74,20 @@ pub(crate) fn base64_dec(data: &str) -> errors::Result<Vec<u8>> {
     base64::prelude::BASE64_URL_SAFE.decode(data).map_err(|_| CryptoError::CorruptedFilename)
 }
 
+pub(crate) fn file_size_from_size(mut total_size: u64) -> crate::Result<u64> {
+    total_size = total_size.checked_sub_signed(FILE_HEADER_SIZE as i64).ok_or(CryptoError::CorruptedFile)?;
+    let blocks = total_size / FILE_CHUNK_SIZE as u64;
+    let remainder = total_size - (blocks * FILE_CHUNK_SIZE as u64);
+    match remainder {
+        0 => { Ok(blocks * CLEAR_FILE_CHUNK_SIZE as u64) }
+        1..FILE_CHUNK_HEADERS_SIZE_U64 => { Err(CryptoError::CorruptedFile) }
+        _ => { Ok(blocks * CLEAR_FILE_CHUNK_SIZE as u64 + remainder - FILE_CHUNK_HEADERS_SIZE_U64) }
+    }
+}
+
+
 #[inline]
 #[allow(clippy::uninit_assumed_init)]
-pub fn uninit<T>() -> T {
+pub(crate) fn uninit<T>() -> T {
     unsafe { MaybeUninit::uninit().assume_init() }
 }

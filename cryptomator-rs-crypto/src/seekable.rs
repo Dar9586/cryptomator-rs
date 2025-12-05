@@ -1,62 +1,122 @@
 use crate::errors::Result;
+use libc::EBADF;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-pub struct Seekable<T: Read + Write + Seek> {
-    writer: Option<BufWriter<T>>,
-    reader: BufReader<T>,
+pub struct SeekableRw<R: Read + Seek, W: Write + Seek> {
+    writer: BufWriter<W>,
+    reader: BufReader<R>,
 }
 
-impl Seekable<File> {
-    pub fn from_path(f1: &Path, writable: bool) -> Result<Self> {
-        let file = File::options().read(true).write(writable).create(writable).open(f1)?;
-        Self::from_file(file, writable)
+impl SeekableRw<File, File> {
+    pub fn from_path(f1: &Path) -> Result<Self> {
+        let file = File::options().read(true).write(true).create(true).truncate(false).open(f1)?;
+        Self::from_file(file)
     }
-    pub fn from_file(f1: File, writable: bool) -> Result<Self> {
-        if writable {
-            let f2 = f1.try_clone()?;
-            Ok(Self::new(f1, Some(f2)))
-        } else {
-            Ok(Self::new(f1, None))
-        }
+    pub fn from_file(f1: File) -> Result<Self> {
+        let f2 = f1.try_clone()?;
+        Ok(Self::new(f1, f2))
     }
 }
-impl<T: Read + Write + Seek> Seekable<T> {
-    pub fn new(reader: T, writer: Option<T>) -> Self {
+
+impl<R: Read + Seek, W: Write + Seek> SeekableRw<R, W> {
+    pub fn new(reader: R, writer: W) -> Self {
         Self {
-            writer: writer.map(|x| BufWriter::new(x)),
+            writer: BufWriter::new(writer),
             reader: BufReader::new(reader),
         }
     }
 }
-impl<T: Read + Write + Seek> Read for Seekable<T> {
+impl<R: Read + Seek, W: Write + Seek> Read for SeekableRw<R, W> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.reader.read(buf)
+    }
+}
+impl<R: Read + Seek, W: Write + Seek> Write for SeekableRw<R, W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.writer.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+impl<R: Read + Seek, W: Write + Seek> Seek for SeekableRw<R, W> {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.writer.seek(pos)?;
+        self.reader.seek(pos)
+    }
+}
+
+pub struct SeekableRo<R: Read + Seek> {
+    reader: BufReader<R>,
+}
+
+
+impl SeekableRo<File> {
+    pub fn from_path(f1: &Path) -> Result<Self> {
+        let file = File::options().read(true).open(f1)?;
+        Ok(Self::from_file(file))
+    }
+    pub fn from_file(f1: File) -> Self {
+        Self::new(f1)
+    }
+}
+impl<R: Read + Seek> SeekableRo<R> {
+    pub fn new(reader: R) -> Self {
+        Self {
+            reader: BufReader::new(reader),
+        }
+    }
+}
+impl<R: Read + Seek> Read for SeekableRo<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.reader.read(buf)
     }
 }
 
-impl<T: Read + Write + Seek> Write for Seekable<T> {
+impl<R: Read + Seek> Seek for SeekableRo<R> {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.reader.seek(pos)
+    }
+}
+
+pub enum Seekable<R: Read + Seek, W: Write + Seek> {
+    Rw(SeekableRw<R, W>),
+    Ro(SeekableRo<R>),
+}
+impl<R: Read + Seek, W: Write + Seek> Read for Seekable<R, W> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Seekable::Rw(v) => { v.read(buf) },
+            Seekable::Ro(v) => { v.read(buf) },
+        }
+    }
+}
+impl<R: Read + Seek, W: Write + Seek> Write for Seekable<R, W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        match &mut self.writer {
-            None => Err(std::io::Error::other("bad file")),
-            Some(writer) => writer.write(buf)
+        if let Seekable::Rw(v) = self {
+            v.write(buf)
+        } else {
+            Err(std::io::Error::from_raw_os_error(EBADF))
         }
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        match &mut self.writer {
-            None => Err(std::io::Error::other("bad file")),
-            Some(writer) => writer.flush(),
+        if let Seekable::Rw(v) = self {
+            v.flush()
+        } else {
+            Err(std::io::Error::from_raw_os_error(EBADF))
         }
     }
 }
-
-impl<T: Read + Write + Seek> Seek for Seekable<T> {
+impl<R: Read + Seek, W: Write + Seek> Seek for Seekable<R, W> {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        if let Some(writer) = self.writer.as_mut() {
-            writer.seek(pos)?;
+        match self {
+            Seekable::Rw(v) => { v.seek(pos) },
+            Seekable::Ro(v) => { v.seek(pos) },
         }
-        self.reader.seek(pos)
     }
 }
